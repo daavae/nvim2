@@ -21,7 +21,8 @@ ssh "$REMOTE_TARGET" "cd ~/.config/nvim && ./install_$REMOTE_OS.sh"
 # 4. Launch Neovim on the remote server
 echo "Launching Neovim..."
 if [ "$REMOTE_OS" == "linux" ]; then
-    NVIM_PATH="~/.config/nvim/nvim-linux-x86_64.appimage"
+    # We use the extracted AppImage path to avoid FUSE issues
+    NVIM_PATH="~/.config/nvim/nvim-linux-x86_64-extracted/AppRun"
 else
     NVIM_PATH="~/.config/nvim/nvim-macos-arm64/bin/nvim"
 fi
