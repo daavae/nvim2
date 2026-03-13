@@ -295,6 +295,9 @@ vim.keymap.set("n", "<leader>td", function()
 	vim.diagnostic.enable(not vim.diagnostic.is_enabled())
 end, { desc = "Toggle diagnostics" })
 
+vim.keymap.set("n", "<leader>th", ":split | term<CR>", { desc = "Terminal Horizontal" })
+vim.keymap.set("n", "<leader>tv", ":vsplit | term<CR>", { desc = "Terminal Vertical" })
+
 -- ============================================================================
 -- AUTOCMDS
 -- ============================================================================
@@ -395,6 +398,12 @@ vim.api.nvim_create_autocmd("FileType", {
 	end,
 })
 
+vim.api.nvim_create_autocmd("TermOpen", {
+	group = vim.api.nvim_create_augroup("custom-term-open", { clear = true }),
+	callback = function()
+		vim.keymap.set("t", "<Esc>", [[<C-\><C-n>]], { buffer = true })
+	end,
+})
 -- ============================================================================
 -- PLUGINS (vim.pack)
 -- ============================================================================
@@ -417,8 +426,8 @@ vim.pack.add({
 		src = "https://github.com/saghen/blink.cmp",
 		version = vim.version.range("1.*"),
 	},
-	"https://github.com/L3MON4D3/LuaSnip",
-	"https://github.com/folke/which-key.nvim",
+	"https://www.github.com/L3MON4D3/LuaSnip",
+	"https://www.github.com/folke/which-key.nvim",
 })
 
 local function packadd(name)
