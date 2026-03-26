@@ -428,6 +428,8 @@ vim.pack.add({
 	},
 	"https://www.github.com/L3MON4D3/LuaSnip",
 	"https://www.github.com/folke/which-key.nvim",
+	"https://github.com/kdheepak/lazygit.nvim",
+	"https://github.com/folke/tokyonight.nvim",
 })
 
 local function packadd(name)
@@ -446,6 +448,37 @@ packadd("mason.nvim")
 packadd("efmls-configs-nvim")
 packadd("blink.cmp")
 packadd("LuaSnip")
+packadd("lazygit.nvim")
+packadd("tokyonight.nvim")
+vim.cmd.colorscheme("tokyonight-moon")
+vim.pack.add({
+	"https://github.com/hrsh7th/nvim-cmp",
+})
+packadd("nvim-cmp")
+vim.pack.add({
+	"https://code.byted.org/chenjiaqi.cposture/codeverse.vim.git",
+})
+packadd("codeverse.vim")
+
+require("trae").setup({})
+local cmp = require("cmp")
+cmp.setup({
+	mapping = {
+		["<Tab>"] = function(fallback)
+			if cmp.visible() then
+				cmp.confirm({ select = true })
+			else
+				fallback()
+			end
+		end,
+	},
+	sources = {
+		{ name = "trae", group_index = 1 },
+	},
+	experimental = {
+		ghost_text = true,
+	},
+})
 
 -- ============================================================================
 -- PLUGIN CONFIGS
@@ -504,6 +537,30 @@ end
 
 setup_treesitter()
 
+local function nvim_tree_on_attach(bufnr)
+	local api = require("nvim-tree.api")
+	-- Restore all default nvim-tree keymaps first
+	api.config.mappings.default_on_attach(bufnr)
+	local function cp(rel)
+		local node = api.tree.get_node_under_cursor()
+		if not node then
+			return
+		end
+		local path = rel and vim.fn.fnamemodify(node.path, ":.") or node.path
+		vim.fn.setreg("+", path)
+		print(rel and "rel:" or "abs:", path)
+	end
+	vim.keymap.set("n", "<CR>", function()
+		api.node.open.edit()
+	end, { buffer = bufnr, noremap = true, silent = true })
+	vim.keymap.set("n", "yr", function()
+		cp(true)
+	end, { buffer = bufnr, noremap = true, silent = true, desc = "Copy relative path" })
+	vim.keymap.set("n", "ya", function()
+		cp(false)
+	end, { buffer = bufnr, noremap = true, silent = true, desc = "Copy absolute path" })
+end
+
 require("nvim-tree").setup({
 	view = {
 		width = 35,
@@ -511,9 +568,14 @@ require("nvim-tree").setup({
 	filters = {
 		dotfiles = false,
 	},
+	git = {
+		enable = true,
+		ignore = false,
+	},
 	renderer = {
 		group_empty = true,
 	},
+	on_attach = nvim_tree_on_attach,
 })
 vim.keymap.set("n", "<leader>e", function()
 	require("nvim-tree.api").tree.toggle()
@@ -598,6 +660,8 @@ end, { desc = "Toggle inline blame" })
 vim.keymap.set("n", "<leader>hd", function()
 	require("gitsigns").diffthis()
 end, { desc = "Diff this" })
+
+vim.keymap.set("n", "<leader>gg", ":LazyGit<CR>", { desc = "Open LazyGit" })
 
 -- ============================================================================
 -- LSP, Linting, Formatting & Completion
