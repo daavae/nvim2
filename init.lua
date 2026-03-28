@@ -1,5 +1,4 @@
 vim.opt.termguicolors = true
-vim.cmd.colorscheme("unokai")
 
 -- =================================================================================
 -- OPTIONS
@@ -422,10 +421,10 @@ vim.pack.add({
 	"https://www.github.com/neovim/nvim-lspconfig",
 	"https://github.com/mason-org/mason.nvim",
 	"https://github.com/creativenull/efmls-configs-nvim",
-	"https://www.github.com/L3MON4D3/LuaSnip",
 	"https://github.com/folke/tokyonight.nvim",
 	"https://github.com/hrsh7th/cmp-nvim-lsp",
 	"https://github.com/kdheepak/lazygit.nvim",
+	"https://github.com/hrsh7th/nvim-cmp",
 })
 
 local function packadd(name)
@@ -441,13 +440,9 @@ packadd("nvim-tree.lua")
 packadd("nvim-lspconfig")
 packadd("mason.nvim")
 packadd("efmls-configs-nvim")
-packadd("LuaSnip")
 vim.cmd.colorscheme("tokyonight-moon")
 packadd("cmp-nvim-lsp")
 packadd("lazygit.nvim")
-vim.pack.add({
-	"https://github.com/hrsh7th/nvim-cmp",
-})
 packadd("nvim-cmp")
 
 
@@ -464,6 +459,7 @@ cmp.setup({
 	},
 	sources = {
 		{ name = "trae", group_index = 1 },
+		{ name = "nvim_lsp" },
 	},
 	experimental = {
 		ghost_text = true,
