@@ -449,7 +449,6 @@ vim.pack.add({
 	"https://github.com/hrsh7th/nvim-cmp",
 })
 packadd("nvim-cmp")
-packadd("codeverse.vim")
 
 
 local cmp = require("cmp")
