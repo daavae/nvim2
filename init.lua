@@ -422,14 +422,10 @@ vim.pack.add({
 	"https://www.github.com/neovim/nvim-lspconfig",
 	"https://github.com/mason-org/mason.nvim",
 	"https://github.com/creativenull/efmls-configs-nvim",
-	{
-		src = "https://github.com/saghen/blink.cmp",
-		version = vim.version.range("1.*"),
-	},
 	"https://www.github.com/L3MON4D3/LuaSnip",
-	"https://www.github.com/folke/which-key.nvim",
-	"https://github.com/kdheepak/lazygit.nvim",
 	"https://github.com/folke/tokyonight.nvim",
+	"https://github.com/hrsh7th/cmp-nvim-lsp",
+	"https://github.com/kdheepak/lazygit.nvim",
 })
 
 local function packadd(name)
@@ -441,16 +437,14 @@ packadd("gitsigns.nvim")
 packadd("mini.nvim")
 packadd("fzf-lua")
 packadd("nvim-tree.lua")
-packadd("which-key.nvim")
 -- LSP
 packadd("nvim-lspconfig")
 packadd("mason.nvim")
 packadd("efmls-configs-nvim")
-packadd("blink.cmp")
 packadd("LuaSnip")
-packadd("lazygit.nvim")
-packadd("tokyonight.nvim")
 vim.cmd.colorscheme("tokyonight-moon")
+packadd("cmp-nvim-lsp")
+packadd("lazygit.nvim")
 vim.pack.add({
 	"https://github.com/hrsh7th/nvim-cmp",
 })
@@ -589,6 +583,27 @@ vim.api.nvim_set_hl(0, "NvimTreeWinSeparator", { fg = "#2a2a2a", bg = "none" })
 vim.api.nvim_set_hl(0, "NvimTreeEndOfBuffer", { bg = "none" })
 
 require("fzf-lua").setup({})
+require("mini.clue").setup({
+	window = {
+		delay = 0,
+	},
+	triggers = {
+		{ mode = "n", keys = "<Leader>" },
+		{ mode = "x", keys = "<Leader>" },
+		{ mode = "n", keys = "g" },
+		{ mode = "x", keys = "g" },
+		{ mode = "n", keys = "[" },
+		{ mode = "n", keys = "]" },
+	},
+	clues = {
+		require("mini.clue").gen_clues.builtin_completion(),
+		require("mini.clue").gen_clues.g(),
+		require("mini.clue").gen_clues.marks(),
+		require("mini.clue").gen_clues.registers(),
+		require("mini.clue").gen_clues.windows(),
+		require("mini.clue").gen_clues.z(),
+	},
+})
 
 vim.keymap.set("n", "<leader>ff", function()
 	require("fzf-lua").files()
@@ -785,33 +800,8 @@ vim.keymap.set("n", "<leader>q", function()
 end, { desc = "Open diagnostic list" })
 vim.keymap.set("n", "<leader>dl", vim.diagnostic.open_float, { desc = "Show line diagnostics" })
 
-require("blink.cmp").setup({
-	keymap = {
-		preset = "none",
-		["<C-Space>"] = { "show", "hide" },
-		["<CR>"] = { "accept", "fallback" },
-		["<C-n>"] = { "select_next", "fallback" },
-		["<C-p>"] = { "select_prev", "fallback" },
-		["<Tab>"] = { "snippet_forward", "fallback" },
-		["<S-Tab>"] = { "snippet_backward", "fallback" },
-	},
-	appearance = { nerd_font_variant = "mono" },
-	completion = { menu = { auto_show = true } },
-	sources = { default = { "lsp", "path", "buffer", "snippets" } },
-	snippets = {
-		expand = function(snippet)
-			require("luasnip").lsp_expand(snippet)
-		end,
-	},
-
-	fuzzy = {
-		implementation = "prefer_rust",
-		prebuilt_binaries = { download = true },
-	},
-})
-
 vim.lsp.config["*"] = {
-	capabilities = require("blink.cmp").get_lsp_capabilities(),
+	capabilities = require("cmp_nvim_lsp").default_capabilities(),
 }
 
 vim.lsp.config("lua_ls", {
@@ -988,9 +978,3 @@ local function FloatingTerminal()
 end
 
 vim.keymap.set("n", "<leader>t", FloatingTerminal, { noremap = true, silent = true, desc = "Toggle floating terminal" })
-vim.keymap.set("t", "<Esc>", function()
-	if terminal_state.is_open and terminal_state.win and vim.api.nvim_win_is_valid(terminal_state.win) then
-		vim.api.nvim_win_close(terminal_state.win, false)
-		terminal_state.is_open = false
-	end
-end, { noremap = true, silent = true, desc = "Close floating terminal" })
