@@ -1,0 +1,13 @@
+.DS_Store
+pack/
+plugin/packer_compiled.lua
+*.swp
+*.swo
+*.swx
+*~
+Session.vim
+tags
+tmp/
+.cache/
+cache/
+.netrwhist
