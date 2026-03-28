@@ -33,9 +33,17 @@ vim.opt.pumblend = 10 -- popup menu transparency
 vim.opt.winblend = 0 -- floating window transparency
 vim.opt.conceallevel = 0 -- do not hide markup
 vim.opt.concealcursor = "" -- do not hide cursorline in markup
-vim.opt.lazyredraw = true -- do not redraw during macros
 vim.opt.synmaxcol = 300 -- syntax highlighting limit
 vim.opt.fillchars = { eob = " " } -- hide "~" on empty lines
+
+-- Safely re-enable system clipboard after startup
+vim.api.nvim_create_autocmd("VimEnter", {
+	callback = function()
+		if not os.getenv("SSH_TTY") then
+			vim.opt.clipboard:append("unnamedplus")
+		end
+	end,
+})
 
 local undodir = vim.fn.expand("~/.vim/undodir")
 if
@@ -49,9 +57,9 @@ vim.opt.writebackup = false -- do not write to a backup file
 vim.opt.swapfile = false -- do not create a swapfile
 vim.opt.undofile = true -- do create an undo file
 vim.opt.undodir = undodir -- set the undo directory
-vim.opt.updatetime = 300 -- faster completion
-vim.opt.timeoutlen = 500 -- timeout duration
-vim.opt.ttimeoutlen = 0 -- key code timeout
+vim.opt.updatetime = 250 -- faster completion
+vim.opt.timeoutlen = 1000 -- standard timeout duration
+vim.opt.ttimeoutlen = 10 -- key code timeout (fast for escape sequences)
 vim.opt.autoread = true -- auto-reload changes if outside of neovim
 vim.opt.autowrite = false -- do not auto-save
 
@@ -63,12 +71,10 @@ vim.opt.iskeyword:append("-") -- include - in words
 vim.opt.path:append("**") -- include subdirs in search
 vim.opt.selection = "inclusive" -- include last char in selection
 vim.opt.mouse = "a" -- enable mouse support
-vim.opt.clipboard:append("unnamedplus") -- use system clipboard
 vim.opt.modifiable = true -- allow buffer modifications
 vim.opt.encoding = "utf-8" -- set encoding
 
-vim.opt.guicursor =
-	"n-v-c:block,i-ci-ve:block,r-cr:hor20,o:hor50,a:blinkwait700-blinkoff400-blinkon250-Cursor/lCursor,sm:block-blinkwait175-blinkoff150-blinkon175" -- cursor blinking and settings
+vim.opt.guicursor = "n-v-c-sm:block,i-ci-ve:ver25,r-cr-o:hor20,a:blinkwait700-blinkoff400-blinkon250-Cursor/lCursor"
 
 -- Folding: requires treesitter available at runtime; safe fallback if not
 vim.opt.foldmethod = "expr" -- use expression for folding
@@ -90,13 +96,24 @@ vim.opt.maxmempattern = 20000 -- increase max memory
 
 -- Git branch function with caching and Nerd Font icon
 local cached_branch = ""
-local last_check = 0
+
+-- Asynchronous Git branch check (Event-driven)
+local function update_git_branch()
+	vim.system({ "git", "branch", "--show-current" }, { text = true }, function(obj)
+		if obj.code == 0 then
+			cached_branch = obj.stdout:gsub("\n", "")
+		else
+			cached_branch = ""
+		end
+	end)
+end
+
+-- Update branch only on buffer/focus changes, not on every redraw
+vim.api.nvim_create_autocmd({ "BufEnter", "FocusGained" }, {
+	callback = update_git_branch,
+})
+
 local function git_branch()
-	local now = vim.loop.now()
-	if now - last_check > 5000 then -- Check every 5 seconds
-		cached_branch = vim.fn.system("git branch --show-current 2>/dev/null | tr -d '\n'")
-		last_check = now
-	end
 	if cached_branch ~= "" then
 		return " \u{e725} " .. cached_branch .. " " -- nf-dev-git_branch
 	end
@@ -368,21 +385,14 @@ vim.api.nvim_create_autocmd("BufWritePre", {
 -- return to last cursor position
 vim.api.nvim_create_autocmd("BufReadPost", {
 	group = augroup,
-	desc = "Restore last cursor position",
 	callback = function()
-		if vim.o.diff then -- except in diff mode
-			return
+		local mark = vim.api.nvim_buf_get_mark(0, '"')
+		local lcount = vim.api.nvim_buf_line_count(0)
+		if mark[1] > 0 and mark[1] <= lcount then
+			vim.schedule(function()
+				pcall(vim.api.nvim_win_set_cursor, 0, mark)
+			end)
 		end
-
-		local last_pos = vim.api.nvim_buf_get_mark(0, '"') -- {line, col}
-		local last_line = vim.api.nvim_buf_line_count(0)
-
-		local row = last_pos[1]
-		if row < 1 or row > last_line then
-			return
-		end
-
-		pcall(vim.api.nvim_win_set_cursor, 0, last_pos)
 	end,
 })
 
@@ -431,40 +441,44 @@ local function packadd(name)
 	vim.cmd("packadd " .. name)
 end
 
-packadd("nvim-treesitter")
-packadd("gitsigns.nvim")
-packadd("mini.nvim")
-packadd("fzf-lua")
-packadd("nvim-tree.lua")
--- LSP
-packadd("nvim-lspconfig")
-packadd("mason.nvim")
-packadd("efmls-configs-nvim")
-vim.cmd.colorscheme("tokyonight-moon")
-packadd("cmp-nvim-lsp")
-packadd("lazygit.nvim")
-packadd("nvim-cmp")
+-- Defer plugin loading to prevent startup ghosting
+vim.schedule(function()
+	packadd("nvim-treesitter")
+	packadd("gitsigns.nvim")
+	packadd("mini.nvim")
+	packadd("fzf-lua")
+	packadd("nvim-tree.lua")
+	-- LSP
+	packadd("nvim-lspconfig")
+	packadd("mason.nvim")
+	packadd("efmls-configs-nvim")
+	vim.cmd.colorscheme("tokyonight-moon")
+	packadd("cmp-nvim-lsp")
+	packadd("lazygit.nvim")
+	packadd("nvim-cmp")
+end)
 
 
-local cmp = require("cmp")
-cmp.setup({
-	mapping = {
-		["<Tab>"] = function(fallback)
-			if cmp.visible() then
-				cmp.confirm({ select = true })
-			else
-				fallback()
-			end
-		end,
-	},
-	sources = {
-		{ name = "trae", group_index = 1 },
-		{ name = "nvim_lsp" },
-	},
-	experimental = {
-		ghost_text = true,
-	},
-})
+vim.schedule(function()
+	local cmp = require("cmp")
+	cmp.setup({
+		mapping = {
+			["<Tab>"] = function(fallback)
+				if cmp.visible() then
+					cmp.confirm({ select = true })
+				else
+					fallback()
+				end
+			end,
+		},
+		sources = {
+			{ name = "nvim_lsp" },
+		},
+		experimental = {
+			ghost_text = true,
+		},
+	})
+end)
 
 -- ============================================================================
 -- PLUGIN CONFIGS
@@ -507,7 +521,9 @@ local setup_treesitter = function()
 	end
 
 	if #parsers_to_install > 0 then
-		treesitter.install(parsers_to_install)
+		vim.schedule(function()
+			treesitter.install(parsers_to_install)
+		end)
 	end
 
 	local group = vim.api.nvim_create_augroup("TreeSitterConfig", { clear = true })
@@ -521,7 +537,7 @@ local setup_treesitter = function()
 	})
 end
 
-setup_treesitter()
+vim.schedule(setup_treesitter)
 
 local function nvim_tree_on_attach(bufnr)
 	local api = require("nvim-tree.api")
