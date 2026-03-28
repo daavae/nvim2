@@ -449,12 +449,9 @@ vim.pack.add({
 	"https://github.com/hrsh7th/nvim-cmp",
 })
 packadd("nvim-cmp")
-vim.pack.add({
-	"https://code.byted.org/chenjiaqi.cposture/codeverse.vim.git",
-})
 packadd("codeverse.vim")
 
-require("trae").setup({})
+
 local cmp = require("cmp")
 cmp.setup({
 	mapping = {
