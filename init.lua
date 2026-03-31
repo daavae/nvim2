@@ -458,7 +458,11 @@ require("trae").setup({})
 local cmp = require("cmp")
 cmp.setup({
 	mapping = {
-		["<Tab>"] = function(fallback)
+		["<C-n>"] = cmp.mapping.select_next_item({ behavior = cmp.SelectBehavior.Select }),
+		["<C-p>"] = cmp.mapping.select_prev_item({ behavior = cmp.SelectBehavior.Select }),
+		["<C-e>"] = cmp.mapping.abort(),
+		["<C-Space>"] = cmp.mapping.complete(),
+		["<CR>"] = function(fallback)
 			if cmp.visible() then
 				cmp.confirm({ select = true })
 			else
@@ -466,9 +470,15 @@ cmp.setup({
 			end
 		end,
 	},
-	sources = {
-		{ name = "trae", group_index = 1 },
+	snippet = {
+		expand = function(args)
+			require("luasnip").lsp_expand(args.body)
+		end,
 	},
+	sources = cmp.config.sources({
+		{ name = "trae", group_index = 1 },
+		{ name = "nvim_lsp" },
+	}),
 	experimental = {
 		ghost_text = true,
 	},
