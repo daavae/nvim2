@@ -1,0 +1,28 @@
+# Commands
+## Make a new TMUX session with the name my session and window name of mywindow
+tmux new -s mysession -n mywindow
+## Kill tmux session with name mysession
+tmux kill-ses -t mysession
+## attach to session with name mysession
+tmux a -t mysession
+
+# Hotkeys
+## Session and window preview
+<C-Space> w
+## Create window
+<C-Space> c
+## Close current window
+<C-Space> &
+## Rename window
+<C-Space> ,
+## Split current panes, vert and horiz
+<C-Space> %
+<C-Space> "
+## Close current pane
+<C-Space> x
+## Rename Session
+<C-Space> $
+## detach from session
+<C-Space> d
+## Copy mode
+<C-Space> [
