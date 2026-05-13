@@ -1,0 +1,58 @@
+# Commands
+tmux new -s mysession -n mywindow
+tmux new -A -s mysession
+tmux ls
+tmux a -t mysession
+tmux switch -t mysession
+tmux rename-session -t old new
+tmux kill-session -t mysession
+
+# Hotkeys
+Prefix: <C-Space>
+
+## Help / config
+<C-Space> ?  list all keybinds
+<C-Space> r  reload ~/.tmux.conf
+
+## Sessions
+<C-Space> d  detach
+<C-Space> $  rename session
+
+## Windows (tabs)
+<C-Space> w  choose window/session (interactive list)
+<C-Space> c  new window (opens in current directory)
+<C-Space> ,  rename window
+<C-Space> &  kill window
+<C-Space> n  next window
+<C-Space> p  previous window
+<C-Space> l  last window
+<C-Space> 0-9  go to window number
+
+## Panes (splits)
+<C-Space> %  split vertical (left/right) in current directory
+<C-Space> "  split horizontal (top/bottom) in current directory
+<C-Space> x  kill pane
+<C-Space> z  zoom/unzoom pane
+<C-Space> o  next pane
+<C-Space> q  display pane numbers
+
+Pane navigation (tmux-only)
+<C-Space> h/j/k/l  move left/down/up/right
+
+Pane resizing
+<C-Space> H/J/K/L  resize left/down/up/right (repeatable)
+
+Seamless nvim + tmux navigation (no prefix)
+<C-h/j/k/l>  move in nvim splits; if at edge, moves tmux pane
+
+Clear screen
+<C-Space> C-l  send Ctrl-l to the program (clear)
+
+## Copy mode (vi keys)
+<C-Space> [  enter copy mode
+q  quit copy mode
+/  search
+n/N  next/prev match
+Space  begin selection
+Enter  copy selection to tmux buffer
+<C-Space> ]  paste from tmux buffer
