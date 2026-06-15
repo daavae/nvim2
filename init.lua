@@ -32,6 +32,7 @@ vim.opt.showmode = false -- do not show the mode, instead have it in statusline
 vim.opt.pumheight = 10 -- popup menu height
 vim.opt.pumblend = 10 -- popup menu transparency
 vim.opt.winblend = 0 -- floating window transparency
+vim.opt.viewoptions = "folds,cursor,curdir" -- persist folds and cursor position
 vim.opt.conceallevel = 0 -- do not hide markup
 vim.opt.concealcursor = "" -- do not hide cursorline in markup
 vim.opt.lazyredraw = true -- do not redraw during macros
@@ -78,12 +79,15 @@ vim.opt.foldlevel = 99 -- start with all folds open
 
 vim.opt.splitbelow = true -- horizontal splits go below
 vim.opt.splitright = true -- vertical splits go right
+vim.opt.equalalways = true -- keep splits balanced when the editor is resized
+vim.opt.eadirection = "both" -- rebalance both width and height
 
 vim.opt.wildmenu = true -- tab completion
 vim.opt.wildmode = "longest:full,full" -- complete longest common match, full completion list, cycle through with Tab
 vim.opt.diffopt:append("linematch:60") -- improve diff display
 vim.opt.redrawtime = 10000 -- increase neovim redraw tolerance
 vim.opt.maxmempattern = 20000 -- increase max memory
+
 
 -- ============================================================================
 -- STATUSLINE
@@ -251,17 +255,62 @@ vim.keymap.set("i", "jk", "<Esc>", { desc = "jk binded to be esc key to go into 
 
 vim.keymap.set("n", "n", "nzzzv", { desc = "Next search result (centered)" })
 vim.keymap.set("n", "N", "Nzzzv", { desc = "Previous search result (centered)" })
-vim.keymap.set("n", "<C-d>", "<C-d>zz", { desc = "Half page down (centered)" })
-vim.keymap.set("n", "<C-u>", "<C-u>zz", { desc = "Half page up (centered)" })
+vim.keymap.set("n", "<C-d>", "<C-d>", { desc = "Half page down" })
+vim.keymap.set("n", "<C-u>", "<C-u>", { desc = "Half page up" })
+
+local function fold_aware_paragraph(key, forward)
+	return function()
+		vim.cmd.normal({ key, bang = true })
+
+		local line = vim.fn.line(".")
+		local fold_start = vim.fn.foldclosed(line)
+		if fold_start == -1 then
+			return
+		end
+
+		local target
+		if forward then
+			target = math.min(vim.fn.foldclosedend(line) + 1, vim.api.nvim_buf_line_count(0))
+		else
+			target = math.max(fold_start - 1, 1)
+		end
+
+		vim.api.nvim_win_set_cursor(0, { target, 0 })
+	end
+end
+
+local function jump_closed_fold(forward)
+	return function()
+		local line = vim.fn.line(".")
+		local last = vim.api.nvim_buf_line_count(0)
+		local step = forward and 1 or -1
+		local target = line + step
+
+		while target >= 1 and target <= last do
+			local fold_start = vim.fn.foldclosed(target)
+			if fold_start ~= -1 then
+				vim.api.nvim_win_set_cursor(0, { fold_start, 0 })
+				return
+			end
+			target = target + step
+		end
+	end
+end
+
+vim.keymap.set("n", "}", fold_aware_paragraph("}", true), { desc = "Next paragraph (skip folds)" })
+vim.keymap.set("n", "{", fold_aware_paragraph("{", false), { desc = "Previous paragraph (skip folds)" })
+vim.keymap.set("n", "]z", jump_closed_fold(true), { desc = "Next closed fold" })
+vim.keymap.set("n", "[z", jump_closed_fold(false), { desc = "Previous closed fold" })
 
 vim.keymap.set("n", "<Esc>", "<cmd>nohlsearch<CR>", { desc = "Clear highlighing with <Esc>" })
 vim.keymap.set("n", "<leader>/", "gcc", { desc = "Comment" })
 
 vim.keymap.set("x", "<leader>p", '"_dP', { desc = "Paste without yanking" })
 vim.keymap.set({ "n", "v" }, "<leader>x", '"_d', { desc = "Delete without yanking" })
+vim.keymap.set("n", "<leader>mv", "<cmd>Markview<CR>", { desc = "Toggle markdown view" })
+vim.keymap.set("n", "<leader>vr", "<cmd>source ~/.config/nvim/init.lua<CR>", { desc = "Reload init.lua" })
 
-vim.keymap.set("n", "<leader>bn", ":bnext<CR>", { desc = "Next buffer" })
-vim.keymap.set("n", "<leader>bp", ":bprevious<CR>", { desc = "Previous buffer" })
+vim.keymap.set("n", "<leader>u", ":Undotree<CR>", { noremap = true, silent = true, desc = "Toggle undotree" })
 
 local function tabpage_label(tabpage, index)
 	local ok, name = pcall(vim.api.nvim_tabpage_get_var, tabpage, "tab_name")
@@ -397,10 +446,56 @@ vim.keymap.set("n", "<leader>tv", ":vsplit | term<CR>", { desc = "Terminal Verti
 
 local augroup = vim.api.nvim_create_augroup("UserConfig", { clear = true })
 
+-- Create a directory for persistent undo files
+local undo_dir = vim.fn.stdpath('data') .. '/undodir'
+if not vim.fn.isdirectory(undo_dir) then
+  vim.fn.mkdir(undo_dir, 'p')
+end
+
+-- Enable persistent undo
+vim.opt.undofile = true
+vim.opt.undodir = undo_dir
+
+local function can_persist_view(buf)
+	return vim.bo[buf].buftype == "" and vim.api.nvim_buf_get_name(buf) ~= ""
+end
+
 vim.api.nvim_create_autocmd("TextYankPost", {
 	group = augroup,
 	callback = function()
 		vim.hl.on_yank()
+	end,
+})
+
+vim.api.nvim_create_autocmd("BufWinLeave", {
+	group = augroup,
+	desc = "Save folds and cursor view",
+	callback = function(args)
+		if can_persist_view(args.buf) then
+			vim.cmd("silent! mkview")
+		end
+	end,
+})
+
+vim.api.nvim_create_autocmd("BufWinEnter", {
+	group = augroup,
+	desc = "Restore folds and cursor view",
+	callback = function(args)
+		if can_persist_view(args.buf) then
+			vim.cmd("silent! loadview")
+		end
+	end,
+})
+
+vim.api.nvim_create_autocmd("VimResized", {
+	group = augroup,
+	desc = "Rebalance windows after terminal resize",
+	callback = function()
+		vim.defer_fn(function()
+			pcall(function()
+				vim.cmd("tabdo wincmd =")
+			end)
+		end, 20)
 	end,
 })
 
@@ -581,6 +676,32 @@ vim.api.nvim_create_user_command("Run", function()
 	vim.cmd("startinsert")
 end, { nargs = 0 })
 
+if vim.fn.exists(":LspRestart") == 0 then
+	vim.api.nvim_create_user_command("LspRestart", function()
+		local buf = vim.api.nvim_get_current_buf()
+		local clients = {}
+		if vim.lsp.get_clients then
+			clients = vim.lsp.get_clients({ bufnr = buf })
+		elseif vim.lsp.get_active_clients then
+			clients = vim.lsp.get_active_clients({ bufnr = buf })
+		end
+
+		for _, client in ipairs(clients) do
+			pcall(function()
+				if client.stop then
+					client.stop(true)
+				elseif vim.lsp.stop_client then
+					vim.lsp.stop_client(client.id)
+				end
+			end)
+		end
+
+		vim.defer_fn(function()
+			pcall(vim.cmd, "edit")
+		end, 100)
+	end, { nargs = 0 })
+end
+
 vim.cmd([[cnoreabbrev <expr> run (getcmdtype() == ':' && getcmdline() ==# 'run') ? 'Run' : 'run']])
 
 -- wrap, linebreak and spellcheck on markdown and text files
@@ -597,7 +718,7 @@ vim.api.nvim_create_autocmd("FileType", {
 vim.api.nvim_create_autocmd("TermOpen", {
 	group = vim.api.nvim_create_augroup("custom-term-open", { clear = true }),
 	callback = function()
-		vim.keymap.set("t", "<Esc>", [[<C-\><C-n>]], { buffer = true })
+		vim.keymap.set("t", "<Esc>", [[<C-\><C-n>]], { buffer = true, desc = "Exit terminal mode" })
 		local function tnav(wincmd, tmux_flag)
 			vim.api.nvim_feedkeys(vim.keycode("<C-\\><C-n>"), "n", false)
 			vim.schedule(function()
@@ -606,16 +727,16 @@ vim.api.nvim_create_autocmd("TermOpen", {
 		end
 		vim.keymap.set("t", "<C-h>", function()
 			tnav("wincmd h", "-L")
-		end, { buffer = true, silent = true })
+		end, { buffer = true, silent = true, desc = "Navigate left" })
 		vim.keymap.set("t", "<C-j>", function()
 			tnav("wincmd j", "-D")
-		end, { buffer = true, silent = true })
+		end, { buffer = true, silent = true, desc = "Navigate down" })
 		vim.keymap.set("t", "<C-k>", function()
 			tnav("wincmd k", "-U")
-		end, { buffer = true, silent = true })
+		end, { buffer = true, silent = true, desc = "Navigate up" })
 		vim.keymap.set("t", "<C-l>", function()
 			tnav("wincmd l", "-R")
-		end, { buffer = true, silent = true })
+		end, { buffer = true, silent = true, desc = "Navigate right" })
 	end,
 })
 -- ============================================================================
@@ -628,8 +749,11 @@ vim.pack.add({
 	"https://www.github.com/ibhagwan/fzf-lua",
 	"https://www.github.com/nvim-tree/nvim-tree.lua",
 	"https://github.com/nvim-tree/nvim-web-devicons",
+	"https://github.com/OXY2DEV/markview.nvim",
 	"https://github.com/folke/sidekick.nvim",
 	"https://github.com/phelipetls/jsonpath.nvim",
+	"https://github.com/karb94/neoscroll.nvim",
+	"https://github.com/nvim-treesitter/nvim-treesitter-context",
 	{
 		src = "https://github.com/nvim-treesitter/nvim-treesitter",
 		branch = "main",
@@ -655,19 +779,25 @@ packadd("mini.nvim")
 packadd("fzf-lua")
 packadd("nvim-tree.lua")
 packadd("nvim-web-devicons")
+packadd("markview.nvim")
 packadd("jsonpath.nvim")
+packadd("neoscroll.nvim")
+packadd("nvim-treesitter-context")
 -- LSP
 packadd("nvim-lspconfig")
 packadd("mason.nvim")
 packadd("efmls-configs-nvim")
 packadd("LuaSnip")
+packadd("nvim.undotree")
 vim.cmd.colorscheme("tokyonight-moon")
 vim.api.nvim_set_hl(0, "Cursor", { fg = "#1a1b26", bg = "#ff9e64" })
 vim.api.nvim_set_hl(0, "CursorIM", { fg = "#1a1b26", bg = "#9ece6a" })
 vim.api.nvim_set_hl(0, "lCursor", { fg = "#1a1b26", bg = "#ff9e64" })
+require("markview").setup({})
 local function apply_todo_highlight()
 	vim.api.nvim_set_hl(0, "Todo", { fg = "#1a1b26", bg = "#e0af68", bold = true })
 end
+
 
 apply_todo_highlight()
 vim.api.nvim_create_autocmd("ColorScheme", {
@@ -697,19 +827,25 @@ vim.pack.add({
   "https://github.com/hrsh7th/nvim-cmp",
 })
 packadd("nvim-cmp")
-vim.pack.add({
-  "https://code.byted.org/chenjiaqi.cposture/codeverse.vim.git",
-})
-packadd("codeverse.vim")
+
+local sidekick_coco_cmd = (function()
+	local bundled = vim.fn.expand("~/.local/share/coco/coco")
+	if vim.fn.executable(bundled) == 1 then
+		return { bundled }
+	end
+	local p = vim.fn.exepath("coco")
+	if p ~= "" then
+		return { p }
+	end
+	return { "coco" }
+end)()
 
 require("sidekick").setup({
 	nes = { enabled = false },
 	cli = {
 		picker = "fzf-lua",
 		mux = {
-			backend = "tmux",
-			enabled = true,
-			create = "terminal",
+			enabled = false,
 		},
 		win = {
 			keys = {
@@ -721,7 +857,7 @@ require("sidekick").setup({
 		},
 		tools = {
 			coco = {
-				cmd = { "coco" },
+				cmd = sidekick_coco_cmd,
 				title = "Coco AI",
 				native_scroll = true,
 			},
@@ -730,8 +866,8 @@ require("sidekick").setup({
 })
 
 local function sidekick_coco_installed()
-	if vim.fn.executable("coco") ~= 1 then
-		vim.notify("sidekick: `coco` not found in $PATH", vim.log.levels.ERROR)
+	if vim.fn.executable(sidekick_coco_cmd[1]) ~= 1 then
+		vim.notify("sidekick: `coco` not found (cmd=" .. tostring(sidekick_coco_cmd[1]) .. ")", vim.log.levels.ERROR)
 		return false
 	end
 	return true
@@ -766,36 +902,69 @@ do
 	}
 
 	cli.select = function(opts)
-		if opts == nil and not sidekick_coco_installed() then
+		if not sidekick_coco_installed() then
 			return
 		end
-		return orig.select(sidekick_default_coco(opts))
+		local ok, res = pcall(orig.select, sidekick_default_coco(opts))
+		if not ok then
+			vim.notify("sidekick: " .. tostring(res), vim.log.levels.ERROR)
+		end
+		return res
 	end
 
 	cli.toggle = function(opts)
-		if opts == nil and not sidekick_coco_installed() then
+		if not sidekick_coco_installed() then
 			return
 		end
-		return orig.toggle(sidekick_default_coco(opts))
+		local ok, res = pcall(orig.toggle, sidekick_default_coco(opts))
+		if not ok then
+			vim.notify("sidekick: " .. tostring(res), vim.log.levels.ERROR)
+		end
+		return res
 	end
 
 	cli.show = function(opts)
-		if opts == nil and not sidekick_coco_installed() then
+		if not sidekick_coco_installed() then
 			return
 		end
-		return orig.show(sidekick_default_coco(opts))
+		local ok, res = pcall(orig.show, sidekick_default_coco(opts))
+		if not ok then
+			vim.notify("sidekick: " .. tostring(res), vim.log.levels.ERROR)
+		end
+		return res
 	end
 
 	cli.focus = function(opts)
-		return orig.focus(sidekick_default_coco(opts))
+		if not sidekick_coco_installed() then
+			return
+		end
+		local ok, res = pcall(orig.focus, sidekick_default_coco(opts))
+		if not ok then
+			vim.notify("sidekick: " .. tostring(res), vim.log.levels.ERROR)
+		end
+		return res
 	end
 
 	cli.hide = function(opts)
-		return orig.hide(sidekick_default_coco(opts))
+		if not sidekick_coco_installed() then
+			return
+		end
+		local ok, res = pcall(orig.hide, sidekick_default_coco(opts))
+		if not ok then
+			vim.notify("sidekick: " .. tostring(res), vim.log.levels.ERROR)
+		end
+		return res
 	end
 
 	cli.close = function(opts)
-		return orig.close(sidekick_default_coco(opts))
+		if not sidekick_coco_installed() then
+			return
+		end
+		local ok, res = pcall(orig.close, sidekick_default_coco(opts))
+		if not ok then
+			vim.notify("sidekick: " .. tostring(res), vim.log.levels.ERROR)
+		end
+		return res
 	end
 
 	cli.send = function(opts)
@@ -803,12 +972,20 @@ do
 			if not sidekick_coco_installed() then
 				return
 			end
-			return orig.send({ msg = opts, name = "coco" })
+			local ok, res = pcall(orig.send, { msg = opts, name = "coco" })
+			if not ok then
+				vim.notify("sidekick: " .. tostring(res), vim.log.levels.ERROR)
+			end
+			return res
 		end
-		if opts == nil and not sidekick_coco_installed() then
+		if not sidekick_coco_installed() then
 			return
 		end
-		return orig.send(sidekick_default_coco(opts))
+		local ok, res = pcall(orig.send, sidekick_default_coco(opts))
+		if not ok then
+			vim.notify("sidekick: " .. tostring(res), vim.log.levels.ERROR)
+		end
+		return res
 	end
 end
 
@@ -833,6 +1010,12 @@ end, { desc = "Sidekick: Hide" })
 vim.keymap.set("n", "<leader>aD", function()
 	require("sidekick.cli").close({ name = "coco" })
 end, { desc = "Sidekick: Detach CLI" })
+vim.keymap.set("n", "<leader>ar", function()
+	require("sidekick.cli").close({ name = "coco" })
+	vim.defer_fn(function()
+		require("sidekick.cli").toggle({ name = "coco", focus = true })
+	end, 150)
+end, { desc = "Sidekick: Reset Coco" })
 vim.keymap.set({ "n", "x" }, "<leader>ap", function()
 	require("sidekick.cli").prompt()
 end, { desc = "Sidekick: Prompt" })
@@ -849,7 +1032,7 @@ vim.keymap.set("n", "<leader>ac", function()
 	require("sidekick.cli").toggle({ name = "coco", focus = true })
 end, { desc = "Sidekick: Coco" })
 
-require("trae").setup({})
+require("cmp_nvim_lsp")
 local cmp = require("cmp")
 cmp.setup({
 	mapping = {
@@ -871,8 +1054,9 @@ cmp.setup({
 		end,
 	},
 	sources = cmp.config.sources({
-		{ name = "trae", group_index = 1 },
 		{ name = "nvim_lsp" },
+		--   { name = 'buffer' },
+		--   { name = 'path' },
 	}),
 	experimental = {
 		ghost_text = true,
@@ -935,6 +1119,7 @@ local setup_treesitter = function()
 end
 
 setup_treesitter()
+require("treesitter-context").setup({})
 
 local function nvim_tree_on_attach(bufnr)
 	local api = require("nvim-tree.api")
@@ -984,7 +1169,7 @@ local function nvim_tree_on_attach(bufnr)
 		else
 			api.node.open.preview()
 		end
-	end, { buffer = bufnr, noremap = true, silent = true })
+	end, { buffer = bufnr, noremap = true, silent = true, desc = "Open node with mouse" })
 	vim.keymap.set("n", "yr", function()
 		cp(true)
 	end, { buffer = bufnr, noremap = true, silent = true, desc = "Copy relative path" })
@@ -1041,6 +1226,7 @@ require("mini.clue").setup({
 	triggers = {
 		{ mode = { "n", "x" }, keys = "<Leader>" },
 		{ mode = { "n", "x" }, keys = "g" },
+		{ mode = "n", keys = "z" },
 		{ mode = "n", keys = "[" },
 		{ mode = "n", keys = "]" },
 		-- Marks
@@ -1060,7 +1246,7 @@ require("mini.clue").setup({
 	},
 })
 
-vim.keymap.set("n", "<leader>ff", function()
+vim.keymap.set("n", "<leader>fF", function()
 	require("fzf-lua").files()
 end, { desc = "FZF Files" })
 vim.keymap.set("n", "<leader>fg", function()
@@ -1072,6 +1258,126 @@ end, { desc = "FZF Buffers" })
 vim.keymap.set("n", "<leader>fh", function()
 	require("fzf-lua").help_tags()
 end, { desc = "FZF Help Tags" })
+vim.keymap.set("n", "<leader>fk", function()
+	require("fzf-lua").keymaps()
+end, { desc = "FZF Keymaps" })
+vim.keymap.set("n", "<leader>fm", function()
+	require("fzf-lua").marks()
+end, { desc = "FZF Marks" })
+local function shell_list(cmd, cwd)
+	if vim.system then
+		local result = vim.system(cmd, { cwd = cwd, text = true }):wait()
+		if result.code ~= 0 then
+			return {}
+		end
+		return vim.split(vim.trim(result.stdout or ""), "\n", { plain = true, trimempty = true })
+	end
+
+	local escaped = table.concat(vim.tbl_map(vim.fn.shellescape, cmd), " ")
+	local output = vim.fn.systemlist("cd " .. vim.fn.shellescape(cwd) .. " && " .. escaped)
+	return vim.v.shell_error == 0 and output or {}
+end
+
+local function project_files(cwd)
+	local files = {}
+
+	if vim.fn.executable("rg") == 1 then
+		files = shell_list({ "rg", "--files" }, cwd)
+	elseif vim.fn.executable("fd") == 1 then
+		files = shell_list({ "fd", "--type", "f" }, cwd)
+	elseif vim.fs and vim.fs.find then
+		files = vim.fs.find(function(_, path)
+			return vim.fn.isdirectory(path) == 0
+		end, { path = cwd, type = "file", limit = math.huge })
+	end
+
+	return vim.tbl_map(function(path)
+		if vim.fs and vim.fs.is_absolute and vim.fs.is_absolute(path) then
+			return path
+		end
+		return vim.fs.joinpath(cwd, path)
+	end, files)
+end
+
+local function fzf_visit_paths(cwd)
+	local visits = require("mini.visits")
+	local fzf = require("fzf-lua")
+	local actions = require("fzf-lua.actions")
+	local paths = visits.list_paths(cwd)
+
+	if vim.tbl_isempty(paths) then
+		vim.notify("No visited files yet", vim.log.levels.INFO)
+		return
+	end
+
+	fzf.fzf_exec(paths, {
+		prompt = cwd == "" and "Visits (all)> " or "Visits (cwd)> ",
+		cwd = cwd == "" and vim.loop.cwd() or cwd,
+		previewer = "builtin",
+		file_icons = true,
+		color_icons = true,
+		path_shorten = true,
+		strip_cwd_prefix = cwd ~= "",
+		actions = {
+			["default"] = actions.file_edit,
+			["ctrl-s"] = actions.file_split,
+			["ctrl-v"] = actions.file_vsplit,
+			["ctrl-t"] = actions.file_tabedit,
+		},
+	})
+end
+
+local function fzf_project_files_visits_first(cwd)
+	local visits = require("mini.visits")
+	local fzf = require("fzf-lua")
+	local actions = require("fzf-lua.actions")
+	local visited = visits.list_paths(cwd)
+	local all_files = project_files(cwd)
+	local seen = {}
+	local entries = {}
+	local cwd_prefix = cwd .. "/"
+
+	for _, path in ipairs(visited) do
+		if path == cwd or vim.startswith(path, cwd_prefix) then
+			seen[path] = true
+			table.insert(entries, path)
+		end
+	end
+
+	for _, path in ipairs(all_files) do
+		if not seen[path] then
+			table.insert(entries, path)
+		end
+	end
+
+	if vim.tbl_isempty(entries) then
+		vim.notify("No project files found", vim.log.levels.INFO)
+		return
+	end
+
+	fzf.fzf_exec(entries, {
+		prompt = "Files (visits first)> ",
+		cwd = cwd,
+		previewer = "builtin",
+		file_icons = true,
+		color_icons = true,
+		path_shorten = true,
+		strip_cwd_prefix = true,
+		actions = {
+			["default"] = actions.file_edit,
+			["ctrl-s"] = actions.file_split,
+			["ctrl-v"] = actions.file_vsplit,
+			["ctrl-t"] = actions.file_tabedit,
+		},
+	})
+end
+
+vim.keymap.set("n", "<leader>ff", function()
+	fzf_project_files_visits_first(vim.fn.getcwd())
+end, { desc = "FZF Files (visits first)" })
+vim.keymap.set("n", "<leader>fv", function()
+	fzf_visit_paths("")
+end, { desc = "FZF Visited Files (all)" })
 vim.keymap.set("n", "<leader>fx", function()
 	require("fzf-lua").diagnostics_document()
 end, { desc = "FZF Diagnostics Document" })
@@ -1123,7 +1429,27 @@ vim.api.nvim_create_autocmd({ "FileType", "BufWinEnter" }, {
 })
 
 require("mini.ai").setup({})
+require("mini.align").setup({})
+require("mini.bracketed").setup({})
 require("mini.comment").setup({})
+require("mini.diff").setup({
+	view = {
+		style = "number",
+	},
+})
+require("mini.jump2d").setup({
+	mappings = {
+		start_jumping = "",
+	},
+})
+require("neoscroll").setup({
+	mappings = { "<C-u>", "<C-d>", "<C-b>", "<C-f>" },
+	hide_cursor = true,
+	stop_eof = true,
+	respect_scrolloff = false,
+	cursor_scrolls_alone = true,
+	easing = "quadratic",
+})
 require("mini.move").setup({})
 require("mini.surround").setup({
 	mappings = {
@@ -1140,11 +1466,15 @@ require("mini.surround").setup({
 })
 require("mini.cursorword").setup({})
 require("mini.indentscope").setup({})
-require("mini.pairs").setup({})
 require("mini.trailspace").setup({})
+require("mini.visits").setup({})
 require("mini.bufremove").setup({})
 require("mini.notify").setup({})
 require("mini.icons").setup({})
+
+vim.keymap.set({ "n", "x" }, "<leader>w", function()
+	require("mini.jump2d").start()
+end, { desc = "Jump 2d" })
 
 require("gitsigns").setup({
 	signs = {
@@ -1277,10 +1607,6 @@ local function lsp_on_attach(ev)
 		end)
 	end
 
-	vim.keymap.set("n", "<leader>gd", function()
-		require("fzf-lua").lsp_definitions({ jump_to_single_result = true })
-	end, with_desc("Definitions (picker)"))
-
 	vim.keymap.set("n", "<leader>gD", vim.lsp.buf.definition, with_desc("Go to definition"))
 
 	vim.keymap.set("n", "<leader>gp", peek_definition, with_desc("Peek definition"))
@@ -1299,14 +1625,6 @@ local function lsp_on_attach(ev)
 	vim.keymap.set("n", "<leader>d", function()
 		vim.diagnostic.open_float({ scope = "cursor" })
 	end, with_desc("Diagnostics (cursor)"))
-	vim.keymap.set("n", "<leader>nd", function()
-		vim.diagnostic.jump({ count = 1 })
-	end, with_desc("Next diagnostic"))
-
-	vim.keymap.set("n", "<leader>pd", function()
-		vim.diagnostic.jump({ count = -1 })
-	end, with_desc("Prev diagnostic"))
-
 	vim.keymap.set("n", "K", vim.lsp.buf.hover, with_desc("Hover"))
 
 	vim.keymap.set("n", "<leader>fd", function()
@@ -1453,7 +1771,11 @@ vim.api.nvim_create_autocmd("TermClose", {
 	callback = function(args)
 		if vim.v.event.status == 0 then
 			local buf = args.buf
-			if vim.b[buf].floating_terminal ~= true then
+			if not vim.api.nvim_buf_is_valid(buf) then
+				return
+			end
+			local ok, is_floating_terminal = pcall(vim.api.nvim_buf_get_var, buf, "floating_terminal")
+			if not ok or is_floating_terminal ~= true then
 				return
 			end
 			vim.schedule(function()
@@ -1470,7 +1792,7 @@ vim.api.nvim_create_autocmd("TermOpen", {
 		vim.opt_local.relativenumber = false
 		vim.opt_local.signcolumn = "no"
 		pcall(vim.keymap.del, "t", "<Esc>")
-		vim.keymap.set("t", "<Esc>", "<Esc>", { buffer = true, noremap = true, silent = true })
+		vim.keymap.set("t", "<Esc>", "<Esc>", { buffer = true, noremap = true, silent = true, desc = "Send escape" })
 	end,
 })
 vim.api.nvim_create_autocmd("TermEnter", {
@@ -1478,7 +1800,7 @@ vim.api.nvim_create_autocmd("TermEnter", {
 	pattern = "term://*",
 	callback = function()
 		pcall(vim.keymap.del, "t", "<Esc>")
-		vim.keymap.set("t", "<Esc>", "<Esc>", { buffer = true, noremap = true, silent = true })
+		vim.keymap.set("t", "<Esc>", "<Esc>", { buffer = true, noremap = true, silent = true, desc = "Send escape" })
 	end,
 })
 
