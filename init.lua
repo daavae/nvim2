@@ -790,19 +790,24 @@ packadd("efmls-configs-nvim")
 packadd("LuaSnip")
 packadd("nvim.undotree")
 vim.cmd.colorscheme("tokyonight-moon")
-vim.api.nvim_set_hl(0, "Cursor", { fg = "#1a1b26", bg = "#ff9e64" })
-vim.api.nvim_set_hl(0, "CursorIM", { fg = "#1a1b26", bg = "#9ece6a" })
-vim.api.nvim_set_hl(0, "lCursor", { fg = "#1a1b26", bg = "#ff9e64" })
 require("markview").setup({})
+local function apply_ui_highlights()
+	vim.api.nvim_set_hl(0, "Cursor", { fg = "#1a1b26", bg = "#7dcfff" })
+	vim.api.nvim_set_hl(0, "CursorIM", { fg = "#1a1b26", bg = "#9ece6a" })
+	vim.api.nvim_set_hl(0, "lCursor", { fg = "#1a1b26", bg = "#7dcfff" })
+	vim.api.nvim_set_hl(0, "MatchParen", { fg = "#bb9af7", bg = "NONE", bold = true, underline = true })
+end
 local function apply_todo_highlight()
 	vim.api.nvim_set_hl(0, "Todo", { fg = "#1a1b26", bg = "#e0af68", bold = true })
 end
 
 
+apply_ui_highlights()
 apply_todo_highlight()
 vim.api.nvim_create_autocmd("ColorScheme", {
 	group = augroup,
 	callback = function()
+		apply_ui_highlights()
 		apply_todo_highlight()
 	end,
 })
