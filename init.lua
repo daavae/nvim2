@@ -385,7 +385,7 @@ local function smart_navigate(wincmd, tmux_flag)
 	if vim.env.TMUX == nil or vim.env.TMUX == "" then
 		return
 	end
-	vim.fn.system({ "tmux", "select-pane", tmux_flag })
+	vim.fn.system({ "tmux", "select-pane", "-Z", tmux_flag })
 end
 
 vim.keymap.set("n", "<C-h>", function()
@@ -408,6 +408,9 @@ vim.keymap.set("n", "<C-S-Down>", ":resize -2<CR>", { desc = "Decrease window he
 vim.keymap.set("n", "<C-S-Left>", ":vertical resize -2<CR>", { desc = "Decrease window width" })
 vim.keymap.set("n", "<C-S-Right>", ":vertical resize +2<CR>", { desc = "Increase window width" })
 
+vim.keymap.set("n", "<Tab>", "gt", { desc = "Change tab" })
+vim.keymap.set("n", "<S-Tab>", "gT", { desc = "Change tab backwards" })
+
 vim.keymap.set("n", "<A-j>", ":m .+1<CR>==", { desc = "Move line down" })
 vim.keymap.set("n", "<A-k>", ":m .-2<CR>==", { desc = "Move line up" })
 vim.keymap.set("v", "<A-j>", ":m '>+1<CR>gv=gv", { desc = "Move selection down" })
@@ -423,6 +426,7 @@ vim.keymap.set("n", "<leader>pa", function() -- show file path
 	vim.fn.setreg("+", path)
 	print("file:", path)
 end, { desc = "Copy full file path" })
+vim.keymap.set("n", "<BS>", "<C-^>", { desc = "Switch to alternate buffer" })
 
 vim.keymap.set("n", "<leader>rr", function()
 	if vim.bo.buftype ~= "" then
@@ -436,6 +440,18 @@ end, { desc = "Remove trailing whitespace" })
 vim.keymap.set("n", "<leader>td", function()
 	vim.diagnostic.enable(not vim.diagnostic.is_enabled())
 end, { desc = "Toggle diagnostics" })
+local function show_signature_help()
+	local bufnr = vim.api.nvim_get_current_buf()
+	local winid = vim.b[bufnr].signature_help_winid
+	if winid and vim.api.nvim_win_is_valid(winid) then
+		pcall(vim.api.nvim_win_close, winid, true)
+		vim.b[bufnr].signature_help_winid = nil
+		return
+	end
+
+	vim.lsp.buf.signature_help()
+end
+vim.keymap.set("n", "<leader>ts", show_signature_help, { desc = "Signature help" })
 
 vim.keymap.set("n", "<leader>th", ":split | term<CR>", { desc = "Terminal Horizontal" })
 vim.keymap.set("n", "<leader>tv", ":vsplit | term<CR>", { desc = "Terminal Vertical" })
@@ -458,6 +474,40 @@ vim.opt.undodir = undo_dir
 
 local function can_persist_view(buf)
 	return vim.bo[buf].buftype == "" and vim.api.nvim_buf_get_name(buf) ~= ""
+end
+
+local duplicate_file_jump_in_progress = false
+
+local function normalize_file_path(path)
+	if path == "" then
+		return nil
+	end
+
+	return vim.uv.fs_realpath(path) or vim.fs.normalize(path)
+end
+
+local function find_file_in_other_tabs(bufnr)
+	local current_tab = vim.api.nvim_get_current_tabpage()
+	local target = normalize_file_path(vim.api.nvim_buf_get_name(bufnr))
+	if not target then
+		return nil, nil
+	end
+
+	for _, tabpage in ipairs(vim.api.nvim_list_tabpages()) do
+		if tabpage ~= current_tab then
+			for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tabpage)) do
+				local win_buf = vim.api.nvim_win_get_buf(win)
+				if vim.bo[win_buf].buftype == "" then
+					local candidate = normalize_file_path(vim.api.nvim_buf_get_name(win_buf))
+					if candidate == target then
+						return tabpage, win
+					end
+				end
+			end
+		end
+	end
+
+	return nil, nil
 end
 
 vim.api.nvim_create_autocmd("TextYankPost", {
@@ -487,13 +537,63 @@ vim.api.nvim_create_autocmd("BufWinEnter", {
 	end,
 })
 
+vim.api.nvim_create_autocmd("BufWinEnter", {
+	group = augroup,
+	desc = "Jump to existing tab for already-open files",
+	callback = function(args)
+		if duplicate_file_jump_in_progress or not can_persist_view(args.buf) then
+			return
+		end
+
+		local current_win = vim.api.nvim_get_current_win()
+		if vim.api.nvim_win_get_buf(current_win) ~= args.buf then
+			return
+		end
+
+		local target_tab, target_win = find_file_in_other_tabs(args.buf)
+		if not target_tab or not target_win then
+			return
+		end
+
+		local duplicate_tab = vim.api.nvim_get_current_tabpage()
+		local duplicate_tabnr = vim.api.nvim_tabpage_get_number(duplicate_tab)
+		local duplicate_win = current_win
+
+		duplicate_file_jump_in_progress = true
+		vim.schedule(function()
+			pcall(function()
+				if vim.api.nvim_tabpage_is_valid(target_tab) then
+					vim.api.nvim_set_current_tabpage(target_tab)
+					if vim.api.nvim_win_is_valid(target_win) then
+						vim.api.nvim_set_current_win(target_win)
+					end
+				end
+
+				if vim.api.nvim_win_is_valid(duplicate_win) then
+					local wins = vim.api.nvim_tabpage_is_valid(duplicate_tab) and vim.api.nvim_tabpage_list_wins(duplicate_tab) or {}
+					if #wins > 1 then
+						vim.api.nvim_win_close(duplicate_win, true)
+					elseif vim.api.nvim_tabpage_is_valid(duplicate_tab) then
+						vim.cmd(("%dtabclose"):format(duplicate_tabnr))
+					end
+				end
+			end)
+			duplicate_file_jump_in_progress = false
+		end)
+	end,
+})
+
 vim.api.nvim_create_autocmd("VimResized", {
 	group = augroup,
 	desc = "Rebalance windows after terminal resize",
 	callback = function()
 		vim.defer_fn(function()
 			pcall(function()
+				local current_tab = vim.api.nvim_get_current_tabpage()
 				vim.cmd("tabdo wincmd =")
+				if vim.api.nvim_tabpage_is_valid(current_tab) then
+					vim.api.nvim_set_current_tabpage(current_tab)
+				end
 			end)
 		end, 20)
 	end,
@@ -750,7 +850,7 @@ vim.pack.add({
 	"https://www.github.com/nvim-tree/nvim-tree.lua",
 	"https://github.com/nvim-tree/nvim-web-devicons",
 	"https://github.com/OXY2DEV/markview.nvim",
-	"https://github.com/folke/sidekick.nvim",
+	-- "https://github.com/folke/sidekick.nvim",
 	"https://github.com/phelipetls/jsonpath.nvim",
 	"https://github.com/karb94/neoscroll.nvim",
 	"https://github.com/nvim-treesitter/nvim-treesitter-context",
@@ -796,6 +896,13 @@ local function apply_ui_highlights()
 	vim.api.nvim_set_hl(0, "CursorIM", { fg = "#1a1b26", bg = "#9ece6a" })
 	vim.api.nvim_set_hl(0, "lCursor", { fg = "#1a1b26", bg = "#7dcfff" })
 	vim.api.nvim_set_hl(0, "MatchParen", { fg = "#bb9af7", bg = "NONE", bold = true, underline = true })
+	vim.api.nvim_set_hl(0, "LspSignatureActiveParameter", {
+		fg = "#ff9e64",
+		bg = "NONE",
+		bold = true,
+		undercurl = true,
+		sp = "#ff9e64",
+	})
 end
 local function apply_todo_highlight()
 	vim.api.nvim_set_hl(0, "Todo", { fg = "#1a1b26", bg = "#e0af68", bold = true })
@@ -827,215 +934,216 @@ vim.api.nvim_create_autocmd({ "VimEnter", "WinEnter", "BufWinEnter" }, {
 })
 packadd("cmp-nvim-lsp")
 packadd("lazygit.nvim")
-packadd("sidekick.nvim")
+-- packadd("sidekick.nvim")
 vim.pack.add({
   "https://github.com/hrsh7th/nvim-cmp",
 })
 packadd("nvim-cmp")
 
-local sidekick_coco_cmd = (function()
-	local bundled = vim.fn.expand("~/.local/share/coco/coco")
-	if vim.fn.executable(bundled) == 1 then
-		return { bundled }
-	end
-	local p = vim.fn.exepath("coco")
-	if p ~= "" then
-		return { p }
-	end
-	return { "coco" }
-end)()
-
-require("sidekick").setup({
-	nes = { enabled = false },
-	cli = {
-		picker = "fzf-lua",
-		mux = {
-			enabled = false,
-		},
-		win = {
-			keys = {
-				nav_left = false,
-				nav_down = false,
-				nav_up = false,
-				nav_right = false,
-			},
-		},
-		tools = {
-			coco = {
-				cmd = sidekick_coco_cmd,
-				title = "Coco AI",
-				native_scroll = true,
-			},
-		},
-	},
-})
-
-local function sidekick_coco_installed()
-	if vim.fn.executable(sidekick_coco_cmd[1]) ~= 1 then
-		vim.notify("sidekick: `coco` not found (cmd=" .. tostring(sidekick_coco_cmd[1]) .. ")", vim.log.levels.ERROR)
-		return false
-	end
-	return true
-end
-
-local function sidekick_default_coco(opts)
-	if opts == nil then
-		return { name = "coco" }
-	end
-	if type(opts) == "string" then
-		return opts
-	end
-	if type(opts) == "table" then
-		local has_name = opts.name ~= nil or (opts.filter ~= nil and opts.filter.name ~= nil)
-		if not has_name then
-			return vim.tbl_extend("force", {}, opts, { name = "coco" })
-		end
-	end
-	return opts
-end
-
-do
-	local cli = require("sidekick.cli")
-	local orig = {
-		select = cli.select,
-		toggle = cli.toggle,
-		show = cli.show,
-		focus = cli.focus,
-		hide = cli.hide,
-		close = cli.close,
-		send = cli.send,
-	}
-
-	cli.select = function(opts)
-		if not sidekick_coco_installed() then
-			return
-		end
-		local ok, res = pcall(orig.select, sidekick_default_coco(opts))
-		if not ok then
-			vim.notify("sidekick: " .. tostring(res), vim.log.levels.ERROR)
-		end
-		return res
-	end
-
-	cli.toggle = function(opts)
-		if not sidekick_coco_installed() then
-			return
-		end
-		local ok, res = pcall(orig.toggle, sidekick_default_coco(opts))
-		if not ok then
-			vim.notify("sidekick: " .. tostring(res), vim.log.levels.ERROR)
-		end
-		return res
-	end
-
-	cli.show = function(opts)
-		if not sidekick_coco_installed() then
-			return
-		end
-		local ok, res = pcall(orig.show, sidekick_default_coco(opts))
-		if not ok then
-			vim.notify("sidekick: " .. tostring(res), vim.log.levels.ERROR)
-		end
-		return res
-	end
-
-	cli.focus = function(opts)
-		if not sidekick_coco_installed() then
-			return
-		end
-		local ok, res = pcall(orig.focus, sidekick_default_coco(opts))
-		if not ok then
-			vim.notify("sidekick: " .. tostring(res), vim.log.levels.ERROR)
-		end
-		return res
-	end
-
-	cli.hide = function(opts)
-		if not sidekick_coco_installed() then
-			return
-		end
-		local ok, res = pcall(orig.hide, sidekick_default_coco(opts))
-		if not ok then
-			vim.notify("sidekick: " .. tostring(res), vim.log.levels.ERROR)
-		end
-		return res
-	end
-
-	cli.close = function(opts)
-		if not sidekick_coco_installed() then
-			return
-		end
-		local ok, res = pcall(orig.close, sidekick_default_coco(opts))
-		if not ok then
-			vim.notify("sidekick: " .. tostring(res), vim.log.levels.ERROR)
-		end
-		return res
-	end
-
-	cli.send = function(opts)
-		if type(opts) == "string" then
-			if not sidekick_coco_installed() then
-				return
-			end
-			local ok, res = pcall(orig.send, { msg = opts, name = "coco" })
-			if not ok then
-				vim.notify("sidekick: " .. tostring(res), vim.log.levels.ERROR)
-			end
-			return res
-		end
-		if not sidekick_coco_installed() then
-			return
-		end
-		local ok, res = pcall(orig.send, sidekick_default_coco(opts))
-		if not ok then
-			vim.notify("sidekick: " .. tostring(res), vim.log.levels.ERROR)
-		end
-		return res
-	end
-end
-
-vim.keymap.set({ "n", "t", "i", "x" }, "<C-.>", function()
-	require("sidekick.cli").focus({ name = "coco" })
-end, { desc = "Sidekick: Focus" })
-vim.keymap.set({ "n", "t", "i" }, "<M-u>", function()
-	require("sidekick.cli").toggle({ name = "coco", focus = true })
-end, { desc = "Sidekick: Toggle (Option+U)" })
-vim.keymap.set("x", "<M-u>", function()
-	require("sidekick.cli").send({ msg = "{this}", name = "coco" })
-end, { desc = "Sidekick: Send This (Option+U)" })
-vim.keymap.set("n", "<leader>aa", function()
-	require("sidekick.cli").toggle({ name = "coco", focus = true })
-end, { desc = "Sidekick: Toggle CLI" })
-vim.keymap.set("n", "<leader>as", function()
-	require("sidekick.cli").select({ name = "coco", focus = true })
-end, { desc = "Sidekick: Select CLI" })
-vim.keymap.set("n", "<leader>ad", function()
-	require("sidekick.cli").hide({ name = "coco" })
-end, { desc = "Sidekick: Hide" })
-vim.keymap.set("n", "<leader>aD", function()
-	require("sidekick.cli").close({ name = "coco" })
-end, { desc = "Sidekick: Detach CLI" })
-vim.keymap.set("n", "<leader>ar", function()
-	require("sidekick.cli").close({ name = "coco" })
-	vim.defer_fn(function()
-		require("sidekick.cli").toggle({ name = "coco", focus = true })
-	end, 150)
-end, { desc = "Sidekick: Reset Coco" })
-vim.keymap.set({ "n", "x" }, "<leader>ap", function()
-	require("sidekick.cli").prompt()
-end, { desc = "Sidekick: Prompt" })
-vim.keymap.set({ "n", "x" }, "<leader>at", function()
-	require("sidekick.cli").send({ msg = "{this}", name = "coco" })
-end, { desc = "Sidekick: Send This" })
-vim.keymap.set("n", "<leader>af", function()
-	require("sidekick.cli").send({ msg = "{file}", name = "coco" })
-end, { desc = "Sidekick: Send File" })
-vim.keymap.set("x", "<leader>av", function()
-	require("sidekick.cli").send({ msg = "{selection}", name = "coco" })
-end, { desc = "Sidekick: Send Selection" })
-vim.keymap.set("n", "<leader>ac", function()
-	require("sidekick.cli").toggle({ name = "coco", focus = true })
-end, { desc = "Sidekick: Coco" })
+-- local sidekick_traex_cmd = (function()
+-- 	local bundled = vim.fn.expand("~/.local/bin/traex")
+-- 	if vim.fn.executable(bundled) == 1 then
+-- 		return { bundled }
+-- 	end
+-- 	local p = vim.fn.exepath("traex")
+-- 	if p ~= "" then
+-- 		return { p }
+-- 	end
+-- 	return { "traex" }
+-- end)()
+--
+-- require("sidekick").setup({
+-- 	nes = { enabled = false },
+-- 	cli = {
+-- 		picker = "fzf-lua",
+-- 		mux = {
+-- 			enabled = false,
+-- 		},
+-- 		win = {
+-- 			keys = {
+-- 				nav_left = false,
+-- 				nav_down = false,
+-- 				nav_up = false,
+-- 				nav_right = false,
+-- 				prompt = false,
+-- 			},
+-- 		},
+-- 		tools = {
+-- 			traex = {
+-- 				cmd = sidekick_traex_cmd,
+-- 				title = "TraeX AI",
+-- 				native_scroll = true,
+-- 			},
+-- 		},
+-- 	},
+-- })
+--
+-- local function sidekick_traex_installed()
+-- 	if vim.fn.executable(sidekick_traex_cmd[1]) ~= 1 then
+-- 		vim.notify("sidekick: `traex` not found (cmd=" .. tostring(sidekick_traex_cmd[1]) .. ")", vim.log.levels.ERROR)
+-- 		return false
+-- 	end
+-- 	return true
+-- end
+--
+-- local function sidekick_default_traex(opts)
+-- 	if opts == nil then
+-- 		return { name = "traex" }
+-- 	end
+-- 	if type(opts) == "string" then
+-- 		return opts
+-- 	end
+-- 	if type(opts) == "table" then
+-- 		local has_name = opts.name ~= nil or (opts.filter ~= nil and opts.filter.name ~= nil)
+-- 		if not has_name then
+-- 			return vim.tbl_extend("force", {}, opts, { name = "traex" })
+-- 		end
+-- 	end
+-- 	return opts
+-- end
+--
+-- do
+-- 	local cli = require("sidekick.cli")
+-- 	local orig = {
+-- 		select = cli.select,
+-- 		toggle = cli.toggle,
+-- 		show = cli.show,
+-- 		focus = cli.focus,
+-- 		hide = cli.hide,
+-- 		close = cli.close,
+-- 		send = cli.send,
+-- 	}
+--
+-- 	cli.select = function(opts)
+-- 		if not sidekick_traex_installed() then
+-- 			return
+-- 		end
+-- 		local ok, res = pcall(orig.select, sidekick_default_traex(opts))
+-- 		if not ok then
+-- 			vim.notify("sidekick: " .. tostring(res), vim.log.levels.ERROR)
+-- 		end
+-- 		return res
+-- 	end
+--
+-- 	cli.toggle = function(opts)
+-- 		if not sidekick_traex_installed() then
+-- 			return
+-- 		end
+-- 		local ok, res = pcall(orig.toggle, sidekick_default_traex(opts))
+-- 		if not ok then
+-- 			vim.notify("sidekick: " .. tostring(res), vim.log.levels.ERROR)
+-- 		end
+-- 		return res
+-- 	end
+--
+-- 	cli.show = function(opts)
+-- 		if not sidekick_traex_installed() then
+-- 			return
+-- 		end
+-- 		local ok, res = pcall(orig.show, sidekick_default_traex(opts))
+-- 		if not ok then
+-- 			vim.notify("sidekick: " .. tostring(res), vim.log.levels.ERROR)
+-- 		end
+-- 		return res
+-- 	end
+--
+-- 	cli.focus = function(opts)
+-- 		if not sidekick_traex_installed() then
+-- 			return
+-- 		end
+-- 		local ok, res = pcall(orig.focus, sidekick_default_traex(opts))
+-- 		if not ok then
+-- 			vim.notify("sidekick: " .. tostring(res), vim.log.levels.ERROR)
+-- 		end
+-- 		return res
+-- 	end
+--
+-- 	cli.hide = function(opts)
+-- 		if not sidekick_traex_installed() then
+-- 			return
+-- 		end
+-- 		local ok, res = pcall(orig.hide, sidekick_default_traex(opts))
+-- 		if not ok then
+-- 			vim.notify("sidekick: " .. tostring(res), vim.log.levels.ERROR)
+-- 		end
+-- 		return res
+-- 	end
+--
+-- 	cli.close = function(opts)
+-- 		if not sidekick_traex_installed() then
+-- 			return
+-- 		end
+-- 		local ok, res = pcall(orig.close, sidekick_default_traex(opts))
+-- 		if not ok then
+-- 			vim.notify("sidekick: " .. tostring(res), vim.log.levels.ERROR)
+-- 		end
+-- 		return res
+-- 	end
+--
+-- 	cli.send = function(opts)
+-- 		if type(opts) == "string" then
+-- 			if not sidekick_traex_installed() then
+-- 				return
+-- 			end
+-- 			local ok, res = pcall(orig.send, { msg = opts, name = "traex" })
+-- 			if not ok then
+-- 				vim.notify("sidekick: " .. tostring(res), vim.log.levels.ERROR)
+-- 			end
+-- 			return res
+-- 		end
+-- 		if not sidekick_traex_installed() then
+-- 			return
+-- 		end
+-- 		local ok, res = pcall(orig.send, sidekick_default_traex(opts))
+-- 		if not ok then
+-- 			vim.notify("sidekick: " .. tostring(res), vim.log.levels.ERROR)
+-- 		end
+-- 		return res
+-- 	end
+-- end
+--
+-- vim.keymap.set({ "n", "t", "i", "x" }, "<C-.>", function()
+-- 	require("sidekick.cli").focus({ name = "traex" })
+-- end, { desc = "Sidekick: Focus" })
+-- vim.keymap.set({ "n", "t", "i" }, "<M-u>", function()
+-- 	require("sidekick.cli").toggle({ name = "traex", focus = true })
+-- end, { desc = "Sidekick: Toggle (Option+U)" })
+-- vim.keymap.set("x", "<M-u>", function()
+-- 	require("sidekick.cli").send({ msg = "{this}", name = "traex" })
+-- end, { desc = "Sidekick: Send This (Option+U)" })
+-- vim.keymap.set("n", "<leader>aa", function()
+-- 	require("sidekick.cli").toggle({ name = "traex", focus = true })
+-- end, { desc = "Sidekick: Toggle CLI" })
+-- vim.keymap.set("n", "<leader>as", function()
+-- 	require("sidekick.cli").select({ name = "traex", focus = true })
+-- end, { desc = "Sidekick: Select CLI" })
+-- vim.keymap.set("n", "<leader>ad", function()
+-- 	require("sidekick.cli").hide({ name = "traex" })
+-- end, { desc = "Sidekick: Hide" })
+-- vim.keymap.set("n", "<leader>aD", function()
+-- 	require("sidekick.cli").close({ name = "traex" })
+-- end, { desc = "Sidekick: Detach CLI" })
+-- vim.keymap.set("n", "<leader>ar", function()
+-- 	require("sidekick.cli").close({ name = "traex" })
+-- 	vim.defer_fn(function()
+-- 		require("sidekick.cli").toggle({ name = "traex", focus = true })
+-- 	end, 150)
+-- end, { desc = "Sidekick: Reset TraeX" })
+-- vim.keymap.set({ "n", "x" }, "<leader>ap", function()
+-- 	require("sidekick.cli").prompt()
+-- end, { desc = "Sidekick: Prompt" })
+-- vim.keymap.set({ "n", "x" }, "<leader>at", function()
+-- 	require("sidekick.cli").send({ msg = "{this}", name = "traex" })
+-- end, { desc = "Sidekick: Send This" })
+-- vim.keymap.set("n", "<leader>af", function()
+-- 	require("sidekick.cli").send({ msg = "{file}", name = "traex" })
+-- end, { desc = "Sidekick: Send File" })
+-- vim.keymap.set("x", "<leader>av", function()
+-- 	require("sidekick.cli").send({ msg = "{selection}", name = "traex" })
+-- end, { desc = "Sidekick: Send Selection" })
+-- vim.keymap.set("n", "<leader>ac", function()
+-- 	require("sidekick.cli").toggle({ name = "traex", focus = true })
+-- end, { desc = "Sidekick: TraeX" })
 
 require("cmp_nvim_lsp")
 local cmp = require("cmp")
@@ -1502,22 +1610,22 @@ end, { desc = "Next git hunk" })
 vim.keymap.set("n", "[h", function()
 	require("gitsigns").prev_hunk()
 end, { desc = "Previous git hunk" })
-vim.keymap.set("n", "<leader>hs", function()
+vim.keymap.set("n", "<leader>gs", function()
 	require("gitsigns").stage_hunk()
 end, { desc = "Stage hunk" })
-vim.keymap.set("n", "<leader>hr", function()
+vim.keymap.set("n", "<leader>gr", function()
 	require("gitsigns").reset_hunk()
 end, { desc = "Reset hunk" })
-vim.keymap.set("n", "<leader>hp", function()
+vim.keymap.set("n", "<leader>gP", function()
 	require("gitsigns").preview_hunk()
 end, { desc = "Preview hunk" })
-vim.keymap.set("n", "<leader>hb", function()
+vim.keymap.set("n", "<leader>gb", function()
 	require("gitsigns").blame_line({ full = true })
 end, { desc = "Blame line" })
-vim.keymap.set("n", "<leader>hB", function()
+vim.keymap.set("n", "<leader>gB", function()
 	require("gitsigns").toggle_current_line_blame()
 end, { desc = "Toggle inline blame" })
-vim.keymap.set("n", "<leader>hd", function()
+vim.keymap.set("n", "<leader>gD", function()
 	require("gitsigns").diffthis()
 end, { desc = "Diff this" })
 
@@ -1574,6 +1682,50 @@ do
 	end
 end
 
+local native_signature_help_handler = vim.lsp.with(vim.lsp.handlers.signature_help, {
+	border = "rounded",
+	focusable = false,
+	close_events = { "InsertLeave", "BufHidden", "CursorMoved", "CursorMovedI" },
+})
+
+vim.lsp.handlers["textDocument/signatureHelp"] = function(err, result, ctx, config)
+	local bufnr = ctx and ctx.bufnr
+	if bufnr and (result == nil or result.signatures == nil or vim.tbl_isempty(result.signatures)) then
+		local winid = vim.b[bufnr].signature_help_winid
+		if winid and vim.api.nvim_win_is_valid(winid) then
+			pcall(vim.api.nvim_win_close, winid, true)
+		end
+		vim.b[bufnr].signature_help_winid = nil
+		return
+	end
+
+	local handler_result, winid = native_signature_help_handler(err, result, ctx, config)
+	if bufnr then
+		if winid and vim.api.nvim_win_is_valid(winid) then
+			vim.b[bufnr].signature_help_winid = winid
+		else
+			vim.b[bufnr].signature_help_winid = nil
+		end
+	end
+
+	return handler_result, winid
+end
+
+local function get_preferred_client(bufnr, method)
+	local clients = vim.lsp.get_clients({ bufnr = bufnr, method = method })
+	if #clients == 0 then
+		return nil
+	end
+
+	for _, candidate in ipairs(clients) do
+		if candidate.name ~= "efm" then
+			return candidate
+		end
+	end
+
+	return clients[1]
+end
+
 local function lsp_on_attach(ev)
 	local client = vim.lsp.get_client_by_id(ev.data.client_id)
 	if not client then
@@ -1586,72 +1738,81 @@ local function lsp_on_attach(ev)
 		return vim.tbl_extend("force", opts, { desc = desc })
 	end
 
-	local function peek_definition()
-		local params = vim.lsp.util.make_position_params(0, client.offset_encoding)
-		vim.lsp.buf_request(bufnr, "textDocument/definition", params, function(err, result)
-			if err then
-				vim.notify(err.message or tostring(err), vim.log.levels.ERROR)
+	if not vim.b[bufnr].lsp_buffer_setup_done then
+		vim.b[bufnr].lsp_buffer_setup_done = true
+
+		local function peek_definition()
+			local definition_client = get_preferred_client(bufnr, "textDocument/definition")
+			if not definition_client then
+				vim.notify("No definition provider attached", vim.log.levels.INFO)
 				return
 			end
-			if result == nil then
-				vim.notify("No definition found", vim.log.levels.INFO)
-				return
-			end
-			local location = result
-			if type(result) == "table" and (result.uri == nil and result.targetUri == nil) then
-				location = result[1]
-				if #result > 1 then
-					vim.notify(("Multiple definitions (%d), showing first"):format(#result), vim.log.levels.INFO)
+
+			local params = vim.lsp.util.make_position_params(0, definition_client.offset_encoding)
+			vim.lsp.buf_request(bufnr, "textDocument/definition", params, function(err, result)
+				if err then
+					vim.notify(err.message or tostring(err), vim.log.levels.ERROR)
+					return
 				end
-			end
-			if location == nil then
-				vim.notify("No definition found", vim.log.levels.INFO)
-				return
-			end
-			vim.lsp.util.preview_location(location, { border = "rounded" })
-		end)
+				if result == nil then
+					vim.notify("No definition found", vim.log.levels.INFO)
+					return
+				end
+				local location = result
+				if type(result) == "table" and (result.uri == nil and result.targetUri == nil) then
+					location = result[1]
+					if #result > 1 then
+						vim.notify(("Multiple definitions (%d), showing first"):format(#result), vim.log.levels.INFO)
+					end
+				end
+				if location == nil then
+					vim.notify("No definition found", vim.log.levels.INFO)
+					return
+				end
+				vim.lsp.util.preview_location(location, { border = "rounded" })
+			end)
+		end
+
+		vim.keymap.set("n", "<leader>gd", vim.lsp.buf.definition, with_desc("Go to definition"))
+		vim.keymap.set("n", "<leader>gp", peek_definition, with_desc("Peek definition"))
+		vim.keymap.set("n", "<leader>gS", function()
+			vim.cmd("vsplit")
+			vim.lsp.buf.definition()
+		end, with_desc("Definition (vsplit)"))
+
+		vim.keymap.set("n", "<leader>ca", vim.lsp.buf.code_action, with_desc("Code action"))
+		vim.keymap.set("n", "<leader>rn", vim.lsp.buf.rename, with_desc("Rename symbol"))
+		vim.keymap.set("n", "<leader>D", function()
+			vim.diagnostic.open_float({ scope = "line" })
+		end, with_desc("Diagnostics (line)"))
+		vim.keymap.set("n", "<leader>d", function()
+			vim.diagnostic.open_float({ scope = "cursor" })
+		end, with_desc("Diagnostics (cursor)"))
+		vim.keymap.set("n", "K", vim.lsp.buf.hover, with_desc("Hover"))
+		vim.keymap.set("i", "<C-k>", vim.lsp.buf.signature_help, with_desc("Signature help"))
+
+		vim.keymap.set("n", "<leader>fd", function()
+			require("fzf-lua").lsp_definitions({ jump_to_single_result = true })
+		end, with_desc("Definitions (picker)"))
+		vim.keymap.set("n", "<leader>fr", function()
+			require("fzf-lua").lsp_references()
+		end, with_desc("References (picker)"))
+		vim.keymap.set("n", "<leader>ft", function()
+			require("fzf-lua").lsp_typedefs()
+		end, with_desc("Type definitions (picker)"))
+		vim.keymap.set("n", "<leader>fs", function()
+			require("fzf-lua").lsp_document_symbols()
+		end, with_desc("Document symbols (picker)"))
+		vim.keymap.set("n", "<leader>fw", function()
+			require("fzf-lua").lsp_workspace_symbols()
+		end, with_desc("Workspace symbols (picker)"))
+		vim.keymap.set("n", "<leader>fi", function()
+			require("fzf-lua").lsp_implementations()
+		end, with_desc("Implementations (picker)"))
 	end
 
-	vim.keymap.set("n", "<leader>gD", vim.lsp.buf.definition, with_desc("Go to definition"))
-
-	vim.keymap.set("n", "<leader>gp", peek_definition, with_desc("Peek definition"))
-
-	vim.keymap.set("n", "<leader>gS", function()
-		vim.cmd("vsplit")
-		vim.lsp.buf.definition()
-	end, with_desc("Definition (vsplit)"))
-
-	vim.keymap.set("n", "<leader>ca", vim.lsp.buf.code_action, with_desc("Code action"))
-	vim.keymap.set("n", "<leader>rn", vim.lsp.buf.rename, with_desc("Rename symbol"))
-
-	vim.keymap.set("n", "<leader>D", function()
-		vim.diagnostic.open_float({ scope = "line" })
-	end, with_desc("Diagnostics (line)"))
-	vim.keymap.set("n", "<leader>d", function()
-		vim.diagnostic.open_float({ scope = "cursor" })
-	end, with_desc("Diagnostics (cursor)"))
-	vim.keymap.set("n", "K", vim.lsp.buf.hover, with_desc("Hover"))
-
-	vim.keymap.set("n", "<leader>fd", function()
-		require("fzf-lua").lsp_definitions({ jump_to_single_result = true })
-	end, with_desc("Definitions (picker)"))
-	vim.keymap.set("n", "<leader>fr", function()
-		require("fzf-lua").lsp_references()
-	end, with_desc("References (picker)"))
-	vim.keymap.set("n", "<leader>ft", function()
-		require("fzf-lua").lsp_typedefs()
-	end, with_desc("Type definitions (picker)"))
-	vim.keymap.set("n", "<leader>fs", function()
-		require("fzf-lua").lsp_document_symbols()
-	end, with_desc("Document symbols (picker)"))
-	vim.keymap.set("n", "<leader>fw", function()
-		require("fzf-lua").lsp_workspace_symbols()
-	end, with_desc("Workspace symbols (picker)"))
-	vim.keymap.set("n", "<leader>fi", function()
-		require("fzf-lua").lsp_implementations()
-	end, with_desc("Implementations (picker)"))
-
-	if client:supports_method("textDocument/codeAction", bufnr) then
+	if client:supports_method("textDocument/codeAction", bufnr) and not vim.b[bufnr].lsp_organize_imports_set then
+		vim.b[bufnr].lsp_organize_imports_set = true
 		vim.keymap.set("n", "<leader>oi", function()
 			vim.lsp.buf.code_action({
 				context = { only = { "source.organizeImports" }, diagnostics = {} },
@@ -1685,7 +1846,9 @@ vim.lsp.config("lua_ls", {
 	},
 })
 vim.lsp.config("pyright", {})
-vim.lsp.config("bashls", {})
+vim.lsp.config("bashls", {
+	filetypes = { "sh", "bash", "zsh" },
+})
 vim.lsp.config("ts_ls", {})
 vim.lsp.config("gopls", {})
 vim.lsp.config("clangd", {})
@@ -1694,7 +1857,6 @@ do
 	local luacheck = require("efmls-configs.linters.luacheck")
 	local stylua = require("efmls-configs.formatters.stylua")
 
-	local flake8 = require("efmls-configs.linters.flake8")
 	local black = require("efmls-configs.formatters.black")
 
 	local prettier_d = require("efmls-configs.formatters.prettier_d")
@@ -1726,6 +1888,8 @@ do
 			"markdown",
 			"python",
 			"sh",
+			"bash",
+			"zsh",
 			"typescript",
 			"typescriptreact",
 			"vue",
@@ -1745,8 +1909,10 @@ do
 				jsonc = { eslint_d, fixjson },
 				lua = { luacheck, stylua },
 				markdown = { prettier_d },
-				python = { flake8, black },
+				python = { black },
 				sh = { shellcheck, shfmt },
+				bash = { shellcheck, shfmt },
+				zsh = { shellcheck, shfmt },
 				typescript = { eslint_d, prettier_d },
 				typescriptreact = { eslint_d, prettier_d },
 				vue = { eslint_d, prettier_d },
