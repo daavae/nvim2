@@ -867,6 +867,7 @@ vim.pack.add({
 	"https://github.com/folke/tokyonight.nvim",
 	"https://github.com/hrsh7th/cmp-nvim-lsp",
 	"https://github.com/kdheepak/lazygit.nvim",
+  "https://github.com/tpope/vim-obsession",
 })
 
 local function packadd(name)
@@ -883,6 +884,7 @@ packadd("markview.nvim")
 packadd("jsonpath.nvim")
 packadd("neoscroll.nvim")
 packadd("nvim-treesitter-context")
+packadd("vim-obsession")
 -- LSP
 packadd("nvim-lspconfig")
 packadd("mason.nvim")
