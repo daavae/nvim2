@@ -1,5 +1,51 @@
+-- Byte-compile and cache Lua modules to speed up startup (Nvim 0.9+).
+if vim.loader and vim.loader.enable then
+	vim.loader.enable()
+end
+
 vim.opt.termguicolors = true
-vim.cmd.colorscheme("unokai")
+
+local function prepend_to_path(path)
+	if not path or path == "" or vim.fn.isdirectory(path) ~= 1 then
+		return
+	end
+
+	local sep = ":"
+	local current_path = vim.env.PATH or ""
+	for entry in string.gmatch(current_path, "([^" .. sep .. "]+)") do
+		if entry == path then
+			return
+		end
+	end
+
+	if current_path == "" then
+		vim.env.PATH = path
+	else
+		vim.env.PATH = path .. sep .. current_path
+	end
+end
+
+local function ensure_node_in_path()
+	if vim.fn.executable("node") == 1 then
+		return
+	end
+
+	local home = vim.env.HOME or ""
+	local nvm_bins = vim.fn.glob(home .. "/.nvm/versions/node/*/bin", false, true)
+	table.sort(nvm_bins)
+
+	for i = #nvm_bins, 1, -1 do
+		prepend_to_path(nvm_bins[i])
+		if vim.fn.executable("node") == 1 then
+			return
+		end
+	end
+
+	prepend_to_path("/opt/homebrew/bin")
+	prepend_to_path("/usr/local/bin")
+end
+
+ensure_node_in_path()
 
 -- =================================================================================
 -- OPTIONS
@@ -88,7 +134,6 @@ vim.opt.diffopt:append("linematch:60") -- improve diff display
 vim.opt.redrawtime = 10000 -- increase neovim redraw tolerance
 vim.opt.maxmempattern = 20000 -- increase max memory
 
-
 -- ============================================================================
 -- STATUSLINE
 -- ============================================================================
@@ -96,11 +141,26 @@ vim.opt.maxmempattern = 20000 -- increase max memory
 -- Git branch function with caching and Nerd Font icon
 local cached_branch = ""
 local last_check = 0
+local branch_job_running = false
 local function git_branch()
+	-- Prefer the branch gitsigns already tracks (no extra process).
+	local head = vim.b.gitsigns_head
+	if head and head ~= "" then
+		return " \u{e725} " .. head .. " " -- nf-dev-git_branch
+	end
+
+	-- Fallback: refresh asynchronously so the statusline never blocks on git.
 	local now = vim.loop.now()
-	if now - last_check > 5000 then -- Check every 5 seconds
-		cached_branch = vim.fn.system("git branch --show-current 2>/dev/null | tr -d '\n'")
+	if now - last_check > 5000 and not branch_job_running then
 		last_check = now
+		branch_job_running = true
+		vim.system({ "git", "branch", "--show-current" }, { text = true }, function(res)
+			branch_job_running = false
+			local out = (res.code == 0 and res.stdout or ""):gsub("%s+$", "")
+			vim.schedule(function()
+				cached_branch = out
+			end)
+		end)
 	end
 	if cached_branch ~= "" then
 		return " \u{e725} " .. cached_branch .. " " -- nf-dev-git_branch
@@ -201,35 +261,34 @@ _G.git_branch = git_branch
 _G.file_type = file_type
 _G.file_size = file_size
 
-vim.cmd([[
-  highlight StatusLineBold gui=bold cterm=bold
-]])
-
 -- Function to change statusline based on window focus
 local function setup_dynamic_statusline()
 	vim.api.nvim_create_autocmd({ "WinEnter", "BufEnter" }, {
 		callback = function()
 			vim.opt_local.statusline = table.concat({
-				"  ",
-				"%#StatusLineBold#",
-				"%{v:lua.mode_icon()}",
-				"%#StatusLine#",
-				" \u{e0b1} %f %h%m%r", -- nf-pl-left_hard_divider
-				"%{v:lua.git_branch()}",
-				"\u{e0b1} ", -- nf-pl-left_hard_divider
-				"%{v:lua.file_type()}",
-				"\u{e0b1} ", -- nf-pl-left_hard_divider
-				"%{v:lua.file_size()}",
-				"%=", -- Right-align everything after this
-				" \u{f017} %l:%c  %P ", -- nf-fa-clock_o for line/col
+				"%#StMode#",
+				"%{v:lua.mode_icon()} ",
+				"%#StModeSep#\u{e0b0}", -- nf-pl-left_hard_divider (filled)
+				"%#StFile# %f %h%m%r ",
+				"%#StGit#%{v:lua.git_branch()}",
+				"%#StFileSep#\u{e0b0}",
+				"%#StFileType# %{v:lua.file_type()} ",
+				"%#StFileTypeSep#\u{e0b0}",
+				"%#StInfo#%{v:lua.file_size()}",
+				"%#StInfo#%=", -- Right-align everything after this
+				"%#StPosSep#\u{e0b2}", -- nf-pl-right_hard_divider (filled)
+				"%#StPos# \u{f017} %l:%c  %P ", -- nf-fa-clock_o for line/col
 			})
 		end,
 	})
-	vim.api.nvim_set_hl(0, "StatusLineBold", { bold = true })
 
 	vim.api.nvim_create_autocmd({ "WinLeave", "BufLeave" }, {
 		callback = function()
-			vim.opt_local.statusline = "  %f %h%m%r \u{e0b1} %{v:lua.file_type()} %=  %l:%c   %P "
+			vim.opt_local.statusline = table.concat({
+				"  ",
+				"%#StFileNC# %f %h%m%r ",
+				"%#StatusLine# \u{e0b1} %{v:lua.file_type()} %=  %l:%c   %P ",
+			})
 		end,
 	})
 end
@@ -463,9 +522,9 @@ vim.keymap.set("n", "<leader>tv", ":vsplit | term<CR>", { desc = "Terminal Verti
 local augroup = vim.api.nvim_create_augroup("UserConfig", { clear = true })
 
 -- Create a directory for persistent undo files
-local undo_dir = vim.fn.stdpath('data') .. '/undodir'
+local undo_dir = vim.fn.stdpath("data") .. "/undodir"
 if not vim.fn.isdirectory(undo_dir) then
-  vim.fn.mkdir(undo_dir, 'p')
+	vim.fn.mkdir(undo_dir, "p")
 end
 
 -- Enable persistent undo
@@ -510,6 +569,37 @@ local function find_file_in_other_tabs(bufnr)
 	return nil, nil
 end
 
+local function close_duplicate_view(tabpage, win)
+	if not vim.api.nvim_win_is_valid(win) then
+		return
+	end
+
+	local tabnr = vim.api.nvim_tabpage_get_number(tabpage)
+	local wins = vim.api.nvim_tabpage_is_valid(tabpage) and vim.api.nvim_tabpage_list_wins(tabpage) or {}
+	if #wins > 1 then
+		vim.api.nvim_win_close(win, true)
+	elseif vim.api.nvim_tabpage_is_valid(tabpage) then
+		vim.cmd(("%dtabclose"):format(tabnr))
+	end
+end
+
+local function switch_to_existing_file_view(target_tab, target_win, duplicate_tab, duplicate_win)
+	duplicate_file_jump_in_progress = true
+	vim.schedule(function()
+		pcall(function()
+			if vim.api.nvim_tabpage_is_valid(target_tab) then
+				vim.api.nvim_set_current_tabpage(target_tab)
+				if vim.api.nvim_win_is_valid(target_win) then
+					vim.api.nvim_set_current_win(target_win)
+				end
+			end
+
+			close_duplicate_view(duplicate_tab, duplicate_win)
+		end)
+		duplicate_file_jump_in_progress = false
+	end)
+end
+
 vim.api.nvim_create_autocmd("TextYankPost", {
 	group = augroup,
 	callback = function()
@@ -539,7 +629,7 @@ vim.api.nvim_create_autocmd("BufWinEnter", {
 
 vim.api.nvim_create_autocmd("BufWinEnter", {
 	group = augroup,
-	desc = "Jump to existing tab for already-open files",
+	desc = "Prompt for already-open files",
 	callback = function(args)
 		if duplicate_file_jump_in_progress or not can_persist_view(args.buf) then
 			return
@@ -555,30 +645,30 @@ vim.api.nvim_create_autocmd("BufWinEnter", {
 			return
 		end
 
+		local target_path = normalize_file_path(vim.api.nvim_buf_get_name(args.buf))
+		if vim.w.duplicate_file_keep_path == target_path then
+			return
+		end
+
 		local duplicate_tab = vim.api.nvim_get_current_tabpage()
-		local duplicate_tabnr = vim.api.nvim_tabpage_get_number(duplicate_tab)
 		local duplicate_win = current_win
 
-		duplicate_file_jump_in_progress = true
 		vim.schedule(function()
-			pcall(function()
-				if vim.api.nvim_tabpage_is_valid(target_tab) then
-					vim.api.nvim_set_current_tabpage(target_tab)
-					if vim.api.nvim_win_is_valid(target_win) then
-						vim.api.nvim_set_current_win(target_win)
-					end
-				end
+			if not vim.api.nvim_win_is_valid(duplicate_win) or not vim.api.nvim_tabpage_is_valid(target_tab) then
+				return
+			end
 
-				if vim.api.nvim_win_is_valid(duplicate_win) then
-					local wins = vim.api.nvim_tabpage_is_valid(duplicate_tab) and vim.api.nvim_tabpage_list_wins(duplicate_tab) or {}
-					if #wins > 1 then
-						vim.api.nvim_win_close(duplicate_win, true)
-					elseif vim.api.nvim_tabpage_is_valid(duplicate_tab) then
-						vim.cmd(("%dtabclose"):format(duplicate_tabnr))
-					end
-				end
-			end)
-			duplicate_file_jump_in_progress = false
+			local choice = vim.fn.confirm(
+				"This file is already open in another tab.\nWhat do you want to do?",
+				"&Switch there\n&Keep here",
+				1
+			)
+
+			if choice == 1 then
+				switch_to_existing_file_view(target_tab, target_win, duplicate_tab, duplicate_win)
+			elseif choice == 2 and vim.api.nvim_win_is_valid(duplicate_win) then
+				vim.w.duplicate_file_keep_path = target_path
+			end
 		end)
 	end,
 })
@@ -703,7 +793,8 @@ vim.api.nvim_create_autocmd("BufWritePost", {
 				vim.schedule(function()
 					local name = vim.fn.fnamemodify(root, ":t")
 					local level = code == 0 and vim.log.levels.INFO or vim.log.levels.ERROR
-					local msg = code == 0 and ("update_remote finished (" .. duration_ms .. "ms)") or ("update_remote failed (code " .. code .. ", " .. duration_ms .. "ms)")
+					local msg = code == 0 and ("update_remote finished (" .. duration_ms .. "ms)")
+						or ("update_remote failed (code " .. code .. ", " .. duration_ms .. "ms)")
 					vim.notify(msg, level, { title = name })
 				end)
 			end,
@@ -738,7 +829,12 @@ vim.api.nvim_create_autocmd("BufReadPost", {
 
 vim.api.nvim_create_user_command("Run", function()
 	local buf = vim.api.nvim_get_current_buf()
-	if vim.bo[buf].buftype == "" and vim.bo[buf].modifiable and vim.api.nvim_buf_get_name(buf) ~= "" and vim.bo[buf].modified then
+	if
+		vim.bo[buf].buftype == ""
+		and vim.bo[buf].modifiable
+		and vim.api.nvim_buf_get_name(buf) ~= ""
+		and vim.bo[buf].modified
+	then
 		vim.g.__skip_update_remote = true
 		pcall(function()
 			vim.cmd("silent write")
@@ -850,7 +946,7 @@ vim.pack.add({
 	"https://www.github.com/nvim-tree/nvim-tree.lua",
 	"https://github.com/nvim-tree/nvim-web-devicons",
 	"https://github.com/OXY2DEV/markview.nvim",
-	-- "https://github.com/folke/sidekick.nvim",
+	"https://github.com/folke/sidekick.nvim",
 	"https://github.com/phelipetls/jsonpath.nvim",
 	"https://github.com/karb94/neoscroll.nvim",
 	"https://github.com/nvim-treesitter/nvim-treesitter-context",
@@ -867,7 +963,7 @@ vim.pack.add({
 	"https://github.com/folke/tokyonight.nvim",
 	"https://github.com/hrsh7th/cmp-nvim-lsp",
 	"https://github.com/kdheepak/lazygit.nvim",
-  "https://github.com/tpope/vim-obsession",
+	"https://github.com/tpope/vim-obsession",
 })
 
 local function packadd(name)
@@ -905,11 +1001,35 @@ local function apply_ui_highlights()
 		undercurl = true,
 		sp = "#ff9e64",
 	})
+
+	-- Statusline: one distinct colored block per section, joined by powerline
+	-- separators. Separator groups use fg = left block's bg, bg = right block's bg.
+	local c_mode = "#82aaff" -- blue
+	local c_file = "#3b4261" -- dark blue-grey
+	local c_ft = "#c3e88d" -- green
+	local c_pos = "#86e1fc" -- cyan
+	local c_base = "#1e2030" -- statusline fill
+	local c_dark = "#1b1d2b" -- text on bright blocks
+	local c_light = "#c8d3f5" -- text on dark blocks
+	local c_git = "#ffc777" -- yellow git text (inside file block)
+
+	vim.api.nvim_set_hl(0, "StatusLine", { fg = c_light, bg = c_base })
+	vim.api.nvim_set_hl(0, "StMode", { fg = c_dark, bg = c_mode, bold = true })
+	vim.api.nvim_set_hl(0, "StModeSep", { fg = c_mode, bg = c_file })
+	vim.api.nvim_set_hl(0, "StFile", { fg = c_light, bg = c_file })
+	vim.api.nvim_set_hl(0, "StGit", { fg = c_git, bg = c_file, bold = true })
+	vim.api.nvim_set_hl(0, "StFileSep", { fg = c_file, bg = c_ft })
+	vim.api.nvim_set_hl(0, "StFileType", { fg = c_dark, bg = c_ft, bold = true })
+	vim.api.nvim_set_hl(0, "StFileTypeSep", { fg = c_ft, bg = c_base })
+	vim.api.nvim_set_hl(0, "StInfo", { fg = c_light, bg = c_base })
+	vim.api.nvim_set_hl(0, "StPosSep", { fg = c_pos, bg = c_base })
+	vim.api.nvim_set_hl(0, "StPos", { fg = c_dark, bg = c_pos, bold = true })
+	-- Inactive window: filename gets a muted highlighted block.
+	vim.api.nvim_set_hl(0, "StFileNC", { fg = c_light, bg = c_file, bold = true })
 end
 local function apply_todo_highlight()
 	vim.api.nvim_set_hl(0, "Todo", { fg = "#1a1b26", bg = "#e0af68", bold = true })
 end
-
 
 apply_ui_highlights()
 apply_todo_highlight()
@@ -936,9 +1056,10 @@ vim.api.nvim_create_autocmd({ "VimEnter", "WinEnter", "BufWinEnter" }, {
 })
 packadd("cmp-nvim-lsp")
 packadd("lazygit.nvim")
--- packadd("sidekick.nvim")
+vim.g.trae_log_level = "INFO" -- logs at ~/.config/trae.vim/log/trae.log.<date>; use DEBUG only when troubleshooting
+packadd("sidekick.nvim")
 vim.pack.add({
-  "https://github.com/hrsh7th/nvim-cmp",
+	"https://github.com/hrsh7th/nvim-cmp",
 })
 packadd("nvim-cmp")
 
@@ -953,7 +1074,7 @@ packadd("nvim-cmp")
 -- 	end
 -- 	return { "traex" }
 -- end)()
---
+
 -- require("sidekick").setup({
 -- 	nes = { enabled = false },
 -- 	cli = {
@@ -979,7 +1100,7 @@ packadd("nvim-cmp")
 -- 		},
 -- 	},
 -- })
---
+
 -- local function sidekick_traex_installed()
 -- 	if vim.fn.executable(sidekick_traex_cmd[1]) ~= 1 then
 -- 		vim.notify("sidekick: `traex` not found (cmd=" .. tostring(sidekick_traex_cmd[1]) .. ")", vim.log.levels.ERROR)
@@ -987,7 +1108,7 @@ packadd("nvim-cmp")
 -- 	end
 -- 	return true
 -- end
---
+
 -- local function sidekick_default_traex(opts)
 -- 	if opts == nil then
 -- 		return { name = "traex" }
@@ -1003,7 +1124,7 @@ packadd("nvim-cmp")
 -- 	end
 -- 	return opts
 -- end
---
+
 -- do
 -- 	local cli = require("sidekick.cli")
 -- 	local orig = {
@@ -1015,7 +1136,7 @@ packadd("nvim-cmp")
 -- 		close = cli.close,
 -- 		send = cli.send,
 -- 	}
---
+
 -- 	cli.select = function(opts)
 -- 		if not sidekick_traex_installed() then
 -- 			return
@@ -1026,7 +1147,7 @@ packadd("nvim-cmp")
 -- 		end
 -- 		return res
 -- 	end
---
+
 -- 	cli.toggle = function(opts)
 -- 		if not sidekick_traex_installed() then
 -- 			return
@@ -1037,7 +1158,7 @@ packadd("nvim-cmp")
 -- 		end
 -- 		return res
 -- 	end
---
+
 -- 	cli.show = function(opts)
 -- 		if not sidekick_traex_installed() then
 -- 			return
@@ -1048,7 +1169,7 @@ packadd("nvim-cmp")
 -- 		end
 -- 		return res
 -- 	end
---
+
 -- 	cli.focus = function(opts)
 -- 		if not sidekick_traex_installed() then
 -- 			return
@@ -1059,7 +1180,7 @@ packadd("nvim-cmp")
 -- 		end
 -- 		return res
 -- 	end
---
+
 -- 	cli.hide = function(opts)
 -- 		if not sidekick_traex_installed() then
 -- 			return
@@ -1070,7 +1191,7 @@ packadd("nvim-cmp")
 -- 		end
 -- 		return res
 -- 	end
---
+
 -- 	cli.close = function(opts)
 -- 		if not sidekick_traex_installed() then
 -- 			return
@@ -1081,7 +1202,7 @@ packadd("nvim-cmp")
 -- 		end
 -- 		return res
 -- 	end
---
+
 -- 	cli.send = function(opts)
 -- 		if type(opts) == "string" then
 -- 			if not sidekick_traex_installed() then
@@ -1103,7 +1224,7 @@ packadd("nvim-cmp")
 -- 		return res
 -- 	end
 -- end
---
+
 -- vim.keymap.set({ "n", "t", "i", "x" }, "<C-.>", function()
 -- 	require("sidekick.cli").focus({ name = "traex" })
 -- end, { desc = "Sidekick: Focus" })
@@ -1236,6 +1357,129 @@ end
 setup_treesitter()
 require("treesitter-context").setup({})
 
+-- Floating nvim-tree geometry. Recomputed on every use so it tracks resizes.
+local function nvimtree_screen_dims()
+	local w = vim.o.columns
+	local h = vim.o.lines - vim.o.cmdheight
+	return w, h
+end
+
+-- Centered float: default appearance when the tree is opened/toggled.
+local function nvimtree_centered_win_config()
+	local screen_w, screen_h = nvimtree_screen_dims()
+	local width = math.floor(screen_w * 0.5)
+	local height = math.floor(screen_h * 0.8)
+	return {
+		relative = "editor",
+		border = "rounded",
+		width = width,
+		height = height,
+		row = math.floor((screen_h - height) / 2),
+		col = math.floor((screen_w - width) / 2),
+	}
+end
+
+-- Right-docked float: used for the tree in a peek tab so the file fills the left.
+local function nvimtree_right_win_config()
+	local screen_w, screen_h = nvimtree_screen_dims()
+	local width = math.max(35, math.floor(screen_w * 0.3))
+	local height = math.floor(screen_h * 0.9)
+	return {
+		relative = "editor",
+		border = "rounded",
+		width = width,
+		height = height,
+		row = math.floor((screen_h - height) / 2),
+		col = screen_w - width - 2,
+	}
+end
+
+-- Peek state: a peek opens the file in a throwaway tab with the tree docked
+-- right. Closing either the file or the tree tears the tab down and returns to
+-- the origin tab. Only one peek is active at a time.
+local nvimtree_peek = {
+	active = false,
+	origin_tab = nil, -- tabpage to return to
+	peek_tab = nil, -- throwaway tabpage holding file + tree float
+	tree_win = nil, -- tree float window id in the peek tab
+	file_win = nil, -- file window id in the peek tab
+	tearing_down = false, -- reentrancy guard
+}
+
+-- Tear the peek tab down and return to the origin tab. Safe to call repeatedly.
+local function nvimtree_end_peek()
+	if nvimtree_peek.tearing_down then
+		return
+	end
+	nvimtree_peek.tearing_down = true
+
+	local peek_tab = nvimtree_peek.peek_tab
+	local origin_tab = nvimtree_peek.origin_tab
+
+	-- Reset state up front so the WinClosed safety net sees an inactive peek.
+	nvimtree_peek.active = false
+	nvimtree_peek.peek_tab = nil
+	nvimtree_peek.tree_win = nil
+	nvimtree_peek.file_win = nil
+	nvimtree_peek.origin_tab = nil
+
+	vim.schedule(function()
+		pcall(function()
+			-- Return to origin first so closing the peek tab can't strand us.
+			if origin_tab and vim.api.nvim_tabpage_is_valid(origin_tab) then
+				vim.api.nvim_set_current_tabpage(origin_tab)
+			end
+			if peek_tab and vim.api.nvim_tabpage_is_valid(peek_tab) then
+				local nr = vim.api.nvim_tabpage_get_number(peek_tab)
+				vim.cmd(("silent! %dtabclose"):format(nr))
+			end
+		end)
+		nvimtree_peek.tearing_down = false
+	end)
+end
+
+-- Focus the tree float in the active peek tab (used from the peeked file to go
+-- back and pick another file).
+local function nvimtree_peek_focus_tree()
+	if not nvimtree_peek.active then
+		return
+	end
+	local tw = nvimtree_peek.tree_win
+	if tw and vim.api.nvim_win_is_valid(tw) then
+		pcall(vim.api.nvim_set_current_win, tw)
+	end
+end
+
+-- Install the peek keymaps on the file buffer: q/<Esc> end the peek, <Tab>
+-- jumps back to the tree to peek another file.
+local function nvimtree_peek_bind_file(buf)
+	if not (buf and vim.api.nvim_buf_is_valid(buf)) then
+		return
+	end
+	local o = { buffer = buf, nowait = true, silent = true }
+	pcall(vim.keymap.set, "n", "q", nvimtree_end_peek, vim.tbl_extend("force", o, { desc = "Close peek" }))
+	pcall(vim.keymap.set, "n", "<Esc>", nvimtree_end_peek, vim.tbl_extend("force", o, { desc = "Close peek" }))
+	pcall(vim.keymap.set, "n", "<Tab>", nvimtree_peek_focus_tree, vim.tbl_extend("force", o, { desc = "Back to tree (peek)" }))
+end
+
+-- Load `path` into the existing peek tab's file window, reusing the same tab.
+local function nvimtree_peek_swap_file(path)
+	local fw = nvimtree_peek.file_win
+	if not (fw and vim.api.nvim_win_is_valid(fw)) then
+		return false
+	end
+	local ok = pcall(function()
+		vim.api.nvim_set_current_win(fw)
+		vim.cmd("edit " .. vim.fn.fnameescape(path))
+	end)
+	if not ok then
+		return false
+	end
+	nvimtree_peek.file_win = fw
+	nvimtree_peek_bind_file(vim.api.nvim_win_get_buf(fw))
+	return true
+end
+
 local function nvim_tree_on_attach(bufnr)
 	local api = require("nvim-tree.api")
 	-- Restore all default nvim-tree keymaps first
@@ -1249,9 +1493,137 @@ local function nvim_tree_on_attach(bufnr)
 		vim.fn.setreg("+", path)
 		print(rel and "rel:" or "abs:", path)
 	end
+	local function tree_win()
+		local ok, winid = pcall(api.tree.winid)
+		if ok and winid and vim.api.nvim_win_is_valid(winid) then
+			return winid
+		end
+		return nil
+	end
+
+	-- Move the floating tree to `config` (side/centered) without reopening it.
+	local function reposition_tree(config)
+		local winid = tree_win()
+		if not winid then
+			return
+		end
+		pcall(vim.api.nvim_win_set_config, winid, config)
+	end
+
+	-- Snap focus back to the tree so you can keep selecting/peeking.
+	local function refocus_tree()
+		local winid = tree_win()
+		if winid then
+			pcall(vim.api.nvim_set_current_win, winid)
+		end
+	end
+
 	vim.keymap.set("n", "<CR>", function()
+		local node = api.tree.get_node_under_cursor()
+		if node and node.nodes ~= nil then
+			-- directory: expand/collapse in place
+			api.node.open.edit()
+		else
+			-- file: open it but keep the tree focused so you can pick more
+			api.node.open.edit()
+			reposition_tree(nvimtree_centered_win_config())
+			refocus_tree()
+		end
+	end, { buffer = bufnr, noremap = true, silent = true, desc = "Open (keep tree focused)" })
+	vim.keymap.set("n", "l", function()
 		api.node.open.edit()
-	end, { buffer = bufnr, noremap = true, silent = true })
+	end, { buffer = bufnr, noremap = true, silent = true, nowait = true, desc = "Open and jump to file" })
+
+	-- Peek: open the file in a throwaway tab with the tree docked on the right.
+	-- From the peeked file, <Tab> jumps back here; picking another file reuses
+	-- the same peek tab. Closing the file (q/<Esc>) or the tree (q) returns to
+	-- the origin tab, exactly where you were.
+	vim.keymap.set("n", "<Tab>", function()
+		local node = api.tree.get_node_under_cursor()
+		if not node or node.nodes ~= nil or not node.absolute_path then
+			return
+		end
+
+		-- Already peeking: swap the file into the existing peek tab.
+		if nvimtree_peek.active then
+			nvimtree_peek_swap_file(node.absolute_path)
+			return
+		end
+
+		local origin_tab = vim.api.nvim_get_current_tabpage()
+		-- Close the origin float so it doesn't linger behind the peek tab.
+		api.tree.close()
+
+		vim.cmd("tabnew " .. vim.fn.fnameescape(node.absolute_path))
+		local peek_tab = vim.api.nvim_get_current_tabpage()
+		local file_win = vim.api.nvim_get_current_win()
+
+		-- Open the tree in this tab and dock it right; keep focus on the file.
+		api.tree.open()
+		local tw = tree_win()
+		if tw then
+			pcall(vim.api.nvim_win_set_config, tw, nvimtree_right_win_config())
+		end
+		if vim.api.nvim_win_is_valid(file_win) then
+			pcall(vim.api.nvim_set_current_win, file_win)
+		end
+
+		nvimtree_peek.active = true
+		nvimtree_peek.origin_tab = origin_tab
+		nvimtree_peek.peek_tab = peek_tab
+		nvimtree_peek.tree_win = tw
+		nvimtree_peek.file_win = file_win
+
+		nvimtree_peek_bind_file(vim.api.nvim_win_get_buf(file_win))
+	end, { buffer = bufnr, noremap = true, silent = true, nowait = true, desc = "Peek file (new tab / reuse)" })
+
+	-- q in the tree: end the peek if one is active, otherwise close normally.
+	vim.keymap.set("n", "q", function()
+		if nvimtree_peek.active then
+			nvimtree_end_peek()
+		else
+			api.tree.close()
+		end
+	end, { buffer = bufnr, noremap = true, silent = true, nowait = true, desc = "Close (or end peek)" })
+
+	-- Splits: the file opens behind the centered float; close the float so the
+	-- new split is actually visible and focused.
+	local function open_split(open_fn)
+		return function()
+			open_fn()
+			api.tree.close()
+		end
+	end
+	vim.keymap.set("n", "<C-v>", open_split(api.node.open.vertical),
+		{ buffer = bufnr, noremap = true, silent = true, nowait = true, desc = "Open: vsplit" })
+	vim.keymap.set("n", "<C-x>", open_split(api.node.open.horizontal),
+		{ buffer = bufnr, noremap = true, silent = true, nowait = true, desc = "Open: hsplit" })
+
+	-- <C-t>: open the file in a new tab, move the tree float to that new tab at
+	-- the same cursor spot, and close the tree float on the previous tab.
+	vim.keymap.set("n", "<C-t>", function()
+		local node = api.tree.get_node_under_cursor()
+		if not node or node.nodes ~= nil or not node.absolute_path then
+			return
+		end
+		local tw = tree_win()
+		local cursor = tw and vim.api.nvim_win_get_cursor(tw) or nil
+
+		-- Close the old tab's float first (we already captured what we need).
+		api.tree.close()
+
+		vim.cmd("tabnew " .. vim.fn.fnameescape(node.absolute_path))
+
+		-- Reopen the tree float in the new tab and restore the cursor spot.
+		api.tree.open()
+		local new_tw = tree_win()
+		if new_tw then
+			if cursor then
+				pcall(vim.api.nvim_win_set_cursor, new_tw, cursor)
+			end
+			pcall(vim.api.nvim_set_current_win, new_tw)
+		end
+	end, { buffer = bufnr, noremap = true, silent = true, nowait = true, desc = "Open: new tab (move tree along)" })
 	local nav_opts = { buffer = bufnr, noremap = true, silent = true, nowait = true }
 	vim.keymap.set("n", "S", api.tree.search_node, vim.tbl_extend("force", nav_opts, { desc = "Search node" }))
 	vim.keymap.set("n", "f", api.live_filter.start, vim.tbl_extend("force", nav_opts, { desc = "Live filter" }))
@@ -1296,6 +1668,13 @@ end
 require("nvim-tree").setup({
 	view = {
 		width = 35,
+		float = {
+			enable = true,
+			-- only close on demand (q / <leader>e), never when focus moves away
+			quit_on_focus_loss = false,
+			-- centered float, recomputed on every open so it tracks resizes
+			open_win_config = nvimtree_centered_win_config,
+		},
 	},
 	filters = {
 		dotfiles = false,
@@ -1308,7 +1687,8 @@ require("nvim-tree").setup({
 		group_empty = true,
 	},
 	update_focused_file = {
-		enable = true,
+		-- don't jump the cursor to the current file when the tree opens
+		enable = false,
 		update_root = false,
 	},
 	live_filter = {
@@ -1319,6 +1699,25 @@ require("nvim-tree").setup({
 vim.keymap.set("n", "<leader>e", function()
 	require("nvim-tree.api").tree.toggle()
 end, { desc = "Toggle NvimTree" })
+vim.keymap.set("n", "<leader>fe", function()
+	-- open the float (if needed) and jump the cursor to the current buffer's file
+	require("nvim-tree.api").tree.find_file({ open = true, focus = true })
+end, { desc = "Reveal current file in NvimTree" })
+
+-- Safety net: if either peek window is closed by any means (e.g. :q, :bd,
+-- window navigation away then close), tear the whole peek down cleanly.
+vim.api.nvim_create_autocmd("WinClosed", {
+	group = augroup,
+	callback = function(args)
+		if not nvimtree_peek.active then
+			return
+		end
+		local closed = tonumber(args.match)
+		if closed == nvimtree_peek.file_win or closed == nvimtree_peek.tree_win then
+			nvimtree_end_peek()
+		end
+	end,
+})
 
 vim.api.nvim_set_hl(0, "NvimTreeNormalNC", { bg = "none" })
 vim.api.nvim_set_hl(0, "SignColumn", { bg = "none" })
@@ -1379,39 +1778,17 @@ end, { desc = "FZF Keymaps" })
 vim.keymap.set("n", "<leader>fm", function()
 	require("fzf-lua").marks()
 end, { desc = "FZF Marks" })
-local function shell_list(cmd, cwd)
-	if vim.system then
-		local result = vim.system(cmd, { cwd = cwd, text = true }):wait()
-		if result.code ~= 0 then
-			return {}
-		end
-		return vim.split(vim.trim(result.stdout or ""), "\n", { plain = true, trimempty = true })
+-- Default <CR> for file pickers: open the first (or only) selection in the
+-- current window; open any additional marked selections in new tabs.
+local function fzf_smart_open(selected, opts)
+	local actions = require("fzf-lua.actions")
+	if not selected or #selected == 0 then
+		return
 	end
-
-	local escaped = table.concat(vim.tbl_map(vim.fn.shellescape, cmd), " ")
-	local output = vim.fn.systemlist("cd " .. vim.fn.shellescape(cwd) .. " && " .. escaped)
-	return vim.v.shell_error == 0 and output or {}
-end
-
-local function project_files(cwd)
-	local files = {}
-
-	if vim.fn.executable("rg") == 1 then
-		files = shell_list({ "rg", "--files" }, cwd)
-	elseif vim.fn.executable("fd") == 1 then
-		files = shell_list({ "fd", "--type", "f" }, cwd)
-	elseif vim.fs and vim.fs.find then
-		files = vim.fs.find(function(_, path)
-			return vim.fn.isdirectory(path) == 0
-		end, { path = cwd, type = "file", limit = math.huge })
+	actions.file_edit({ selected[1] }, opts)
+	if #selected > 1 then
+		actions.file_tabedit(vim.list_slice(selected, 2), opts)
 	end
-
-	return vim.tbl_map(function(path)
-		if vim.fs and vim.fs.is_absolute and vim.fs.is_absolute(path) then
-			return path
-		end
-		return vim.fs.joinpath(cwd, path)
-	end, files)
 end
 
 local function fzf_visit_paths(cwd)
@@ -1419,7 +1796,6 @@ local function fzf_visit_paths(cwd)
 	local fzf = require("fzf-lua")
 	local actions = require("fzf-lua.actions")
 	local paths = visits.list_paths(cwd)
-
 	if vim.tbl_isempty(paths) then
 		vim.notify("No visited files yet", vim.log.levels.INFO)
 		return
@@ -1429,57 +1805,15 @@ local function fzf_visit_paths(cwd)
 		prompt = cwd == "" and "Visits (all)> " or "Visits (cwd)> ",
 		cwd = cwd == "" and vim.loop.cwd() or cwd,
 		previewer = "builtin",
+		_type = "file", -- run entries through make_entry.file for icon/theme colors
 		file_icons = true,
 		color_icons = true,
 		path_shorten = true,
 		strip_cwd_prefix = cwd ~= "",
+		fzf_opts = { ["--multi"] = true }, -- <Tab> marks files; <CR> opens all marked
 		actions = {
-			["default"] = actions.file_edit,
-			["ctrl-s"] = actions.file_split,
-			["ctrl-v"] = actions.file_vsplit,
-			["ctrl-t"] = actions.file_tabedit,
-		},
-	})
-end
-
-local function fzf_project_files_visits_first(cwd)
-	local visits = require("mini.visits")
-	local fzf = require("fzf-lua")
-	local actions = require("fzf-lua.actions")
-	local visited = visits.list_paths(cwd)
-	local all_files = project_files(cwd)
-	local seen = {}
-	local entries = {}
-	local cwd_prefix = cwd .. "/"
-
-	for _, path in ipairs(visited) do
-		if path == cwd or vim.startswith(path, cwd_prefix) then
-			seen[path] = true
-			table.insert(entries, path)
-		end
-	end
-
-	for _, path in ipairs(all_files) do
-		if not seen[path] then
-			table.insert(entries, path)
-		end
-	end
-
-	if vim.tbl_isempty(entries) then
-		vim.notify("No project files found", vim.log.levels.INFO)
-		return
-	end
-
-	fzf.fzf_exec(entries, {
-		prompt = "Files (visits first)> ",
-		cwd = cwd,
-		previewer = "builtin",
-		file_icons = true,
-		color_icons = true,
-		path_shorten = true,
-		strip_cwd_prefix = true,
-		actions = {
-			["default"] = actions.file_edit,
+			-- <CR>: first/only file in current window, extra marked files in tabs
+			["default"] = fzf_smart_open,
 			["ctrl-s"] = actions.file_split,
 			["ctrl-v"] = actions.file_vsplit,
 			["ctrl-t"] = actions.file_tabedit,
@@ -1488,8 +1822,15 @@ local function fzf_project_files_visits_first(cwd)
 end
 
 vim.keymap.set("n", "<leader>ff", function()
-	fzf_project_files_visits_first(vim.fn.getcwd())
-end, { desc = "FZF Files (visits first)" })
+	require("fzf-lua").files({
+		fzf_opts = { ["--multi"] = true }, -- <Tab> marks files
+		actions = {
+			-- <CR>: first/only file in current window, extra marked files in tabs
+			["default"] = fzf_smart_open,
+			["ctrl-t"] = require("fzf-lua.actions").file_tabedit, -- all selected in tabs
+		},
+	})
+end, { desc = "FZF Files" })
 vim.keymap.set("n", "<leader>fv", function()
 	fzf_visit_paths("")
 end, { desc = "FZF Visited Files (all)" })
@@ -1580,7 +1921,13 @@ require("mini.surround").setup({
 	},
 })
 require("mini.cursorword").setup({})
-require("mini.indentscope").setup({})
+require("mini.indentscope").setup({
+	-- Disable the scroll-in animation: it redraws on every cursor move and is a
+	-- common source of perceived editing lag.
+	draw = {
+		animation = require("mini.indentscope").gen_animation.none(),
+	},
+})
 require("mini.trailspace").setup({})
 require("mini.visits").setup({})
 require("mini.bufremove").setup({})
@@ -1684,11 +2031,15 @@ do
 	end
 end
 
-local native_signature_help_handler = vim.lsp.with(vim.lsp.handlers.signature_help, {
-	border = "rounded",
-	focusable = false,
-	close_events = { "InsertLeave", "BufHidden", "CursorMoved", "CursorMovedI" },
-})
+local native_signature_help_handler = function(err, result, ctx, config)
+	config = vim.tbl_deep_extend("force", {
+		border = "rounded",
+		focusable = false,
+		close_events = { "InsertLeave", "BufHidden", "CursorMoved", "CursorMovedI" },
+	}, config or {})
+
+	return vim.lsp.handlers.signature_help(err, result, ctx, config)
+end
 
 vim.lsp.handlers["textDocument/signatureHelp"] = function(err, result, ctx, config)
 	local bufnr = ctx and ctx.bufnr
@@ -2039,4 +2390,9 @@ local function FloatingTerminal()
 	})
 end
 
-vim.keymap.set("n", "<leader>tt", FloatingTerminal, { noremap = true, silent = true, desc = "Toggle floating terminal" })
+vim.keymap.set(
+	"n",
+	"<leader>tt",
+	FloatingTerminal,
+	{ noremap = true, silent = true, desc = "Toggle floating terminal" }
+)
