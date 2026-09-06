@@ -39,9 +39,9 @@ local function tool_line(tool)
 end
 
 local function clipboard_line()
-	if vim.fn.has("clipboard") == 1 then
-		return "OK      clipboard                    built into Neovim"
-	end
+	-- `has('clipboard')` is always 1 in Neovim regardless of whether a
+	-- provider is actually installed, so it can't be used to detect this.
+	-- Probe for the executables Neovim's clipboard provider actually uses.
 	for _, executable in ipairs({ "pbcopy", "wl-copy", "xclip", "xsel" }) do
 		if vim.fn.executable(executable) == 1 then
 			return "OK      clipboard provider           " .. vim.fn.exepath(executable)

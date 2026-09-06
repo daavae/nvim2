@@ -22,9 +22,9 @@ local optional = {
 	"https://github.com/kdheepak/lazygit.nvim",
 }
 
-local function declared_plugin_names()
+local function declared_plugin_names(extra_optional)
 	local names = { ["oil.nvim"] = true }
-	for _, specs in ipairs({ eager, optional }) do
+	for _, specs in ipairs({ eager, optional, extra_optional or {} }) do
 		for _, spec in ipairs(specs) do
 			local src = type(spec) == "table" and spec.src or spec
 			local name = src and src:match("/([^/]+)$")
@@ -36,7 +36,7 @@ local function declared_plugin_names()
 	return names
 end
 
-local function clean_lockfile()
+local function clean_lockfile(extra_optional)
 	local path = vim.fn.stdpath("config") .. "/nvim-pack-lock.json"
 	local ok, lines = pcall(vim.fn.readfile, path)
 	if not ok or #lines == 0 then
@@ -46,7 +46,7 @@ local function clean_lockfile()
 	if not decoded_ok or type(lock.plugins) ~= "table" then
 		return
 	end
-	local declared = declared_plugin_names()
+	local declared = declared_plugin_names(extra_optional)
 	local changed = false
 	for name in pairs(lock.plugins) do
 		if not declared[name] then
@@ -106,16 +106,18 @@ end
 
 function M.setup(extra_optional)
 	-- Remove stale committed entries before vim.pack synchronizes the lockfile.
-	clean_lockfile()
+	clean_lockfile(extra_optional)
 	vim.pack.add(eager)
 	vim.pack.add(optional, { load = function() end })
 	if extra_optional and #extra_optional > 0 then
 		vim.pack.add(extra_optional, { load = function() end })
 	end
-	clean_lockfile()
+	clean_lockfile(extra_optional)
 	vim.api.nvim_create_autocmd("VimLeavePre", {
 		group = vim.api.nvim_create_augroup("UserConfigPluginLock", { clear = true }),
-		callback = clean_lockfile,
+		callback = function()
+			clean_lockfile(extra_optional)
+		end,
 	})
 
 	for _, name in ipairs({

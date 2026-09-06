@@ -5,11 +5,6 @@ local M = {}
 local session_dir = vim.fn.stdpath("state") .. "/sessions"
 
 local function stable_hash(value)
-	if vim.fn.executable("sha256sum") == 1 then
-		return vim.fn.system({ "sha256sum" }, value):match("^%x+")
-	elseif vim.fn.executable("shasum") == 1 then
-		return vim.fn.system({ "shasum", "-a", "256" }, value):match("^%x+")
-	end
 	return vim.fn.sha256(value)
 end
 

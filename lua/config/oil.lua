@@ -1,11 +1,35 @@
 local M = {}
 
+-- oil.nvim ships a built-in SSH adapter (oil-ssh://[user@]host[:port]/[path]);
+-- it requires a trailing "/" after the host even with no path given.
+local function ssh_url(target)
+	target = target:gsub("^oil%-ssh://", "")
+	if not target:find("/") then
+		target = target .. "/"
+	end
+	return "oil-ssh://" .. target
+end
+
+-- Last SSH target used via :OilSsh/<leader>es, and whether "-"/<leader>e/
+-- <leader>fe currently resolve to it instead of the local filesystem.
+-- Toggled with <leader>et.
+local active_remote = nil
+local remote_mode = false
+
 local function current_directory()
 	local path = vim.api.nvim_buf_get_name(0)
-	if path == "" or vim.bo.buftype ~= "" then
-		return vim.fn.getcwd()
+	local buftype = vim.bo.buftype
+	-- oil's own file buffers (local AND remote/virtual) use buftype "acwrite"
+	-- so :w can be intercepted (e.g. scp'd back for ssh); they still have a
+	-- real, meaningful directory and shouldn't be treated as "no directory"
+	-- the way a terminal or quickfix buffer would be.
+	if path ~= "" and (buftype == "" or buftype == "acwrite") then
+		return vim.fn.isdirectory(path) == 1 and path or vim.fs.dirname(path)
 	end
-	return vim.fn.isdirectory(path) == 1 and path or vim.fs.dirname(path)
+	if remote_mode and active_remote then
+		return ssh_url(active_remote)
+	end
+	return vim.fn.getcwd()
 end
 
 function M.setup(plugins)
@@ -217,7 +241,14 @@ function M.setup(plugins)
 		local function oil_buffer(buf)
 			vim.defer_fn(function()
 				if vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].filetype == "oil" then
-					enable_hover_preview(buf)
+					-- Auto-preview fires on every cursor move; over a remote
+					-- (ssh) adapter each preview is its own network fetch, and
+					-- fast movement can race two fetches against the same
+					-- preview buffer, crashing oil's read_file callback.
+					-- get_current_dir() only returns non-nil for local dirs.
+					if require("oil").get_current_dir(buf) then
+						enable_hover_preview(buf)
+					end
 					refresh_git_status(buf)
 				end
 			end, 20)
@@ -279,6 +310,52 @@ function M.setup(plugins)
 			oil.open(opts.args ~= "" and opts.args or current_directory())
 		end)
 	end, { nargs = "?", complete = "dir", force = true, desc = "Open Oil in a normal window" })
+
+	local function open_ssh(target)
+		active_remote = target
+		remote_mode = true
+		open_with_preview(function(oil)
+			oil.open(ssh_url(target))
+		end)
+	end
+
+	vim.api.nvim_create_user_command("OilSsh", function(opts)
+		if opts.args == "" then
+			vim.notify("Usage: :OilSsh [user@]host[:port][/path]", vim.log.levels.WARN)
+			return
+		end
+		open_ssh(opts.args)
+	end, { nargs = "?", force = true, desc = "Open Oil over SSH: [user@]host[:port][/path]" })
+
+	vim.keymap.set("n", "<leader>es", function()
+		vim.ui.input({ prompt = "SSH host ([user@]host[:port][/path]): ", default = active_remote or "" }, function(input)
+			if input == nil or input == "" then
+				return
+			end
+			open_ssh(input)
+		end)
+	end, { desc = "Oil: Open over SSH" })
+
+	-- Flip whether "-"/<leader>e/<leader>fe resolve to the local filesystem or
+	-- to the last SSH target, and jump straight there.
+	vim.keymap.set("n", "<leader>et", function()
+		if not active_remote then
+			vim.notify("Oil: no SSH target yet - use <leader>es or :OilSsh first", vim.log.levels.WARN)
+			return
+		end
+		remote_mode = not remote_mode
+		if remote_mode then
+			vim.notify("Oil: '-' now targets " .. active_remote)
+			open_with_preview(function(oil)
+				oil.open(ssh_url(active_remote))
+			end)
+		else
+			vim.notify("Oil: '-' back to local filesystem")
+			open_with_preview(function(oil)
+				oil.open(vim.fn.getcwd())
+			end)
+		end
+	end, { desc = "Oil: Toggle '-' between local and last SSH target" })
 end
 
 return M

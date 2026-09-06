@@ -48,6 +48,11 @@ local function git_branch()
 		return " \u{e725} " .. head .. " "
 	end
 	local path = vim.api.nvim_buf_get_name(0)
+	-- Skip virtual buffers (oil://, oil-ssh://, term://, ...): their "name"
+	-- isn't a real local directory, so spawning git with it as cwd would error.
+	if path:find("://", 1, true) then
+		return ""
+	end
 	local cwd = path ~= "" and vim.fs.dirname(path) or vim.uv.cwd()
 	if not cwd then
 		return ""

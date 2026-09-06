@@ -37,10 +37,19 @@ local function ensure_node_in_path()
 
 	local home = vim.env.HOME or ""
 	local nvm_bins = vim.fn.glob(home .. "/.nvm/versions/node/*/bin", false, true)
-	table.sort(nvm_bins)
+	-- Sort numerically by version, not lexically ("v9" would otherwise sort
+	-- after "v20"), so the newest installed Node is tried first.
+	table.sort(nvm_bins, function(a, b)
+		local a_version = a:match("/v(%d+)[^/]*/bin$")
+		local b_version = b:match("/v(%d+)[^/]*/bin$")
+		if a_version and b_version then
+			return tonumber(a_version) > tonumber(b_version)
+		end
+		return a > b
+	end)
 
-	for i = #nvm_bins, 1, -1 do
-		prepend_to_path(nvm_bins[i])
+	for _, bin in ipairs(nvm_bins) do
+		prepend_to_path(bin)
 		if vim.fn.executable("node") == 1 then
 			return
 		end
@@ -94,7 +103,6 @@ vim.opt.winblend = 0 -- floating window transparency
 vim.opt.viewoptions = "folds,curdir" -- persist folds; cursor position is restored separately
 vim.opt.conceallevel = 0 -- do not hide markup
 vim.opt.concealcursor = "" -- do not hide cursorline in markup
-vim.opt.lazyredraw = true -- do not redraw during macros
 vim.opt.synmaxcol = 300 -- syntax highlighting limit
 vim.opt.fillchars = { eob = " " } -- hide "~" on empty lines
 
@@ -356,7 +364,7 @@ vim.keymap.set("n", "<leader>rr", function()
 		return
 	end
 	local view = vim.fn.winsaveview()
-	vim.cmd([[%s/\s\+$//e]])
+	vim.cmd([[keeppatterns %s/\s\+$//e]])
 	vim.fn.winrestview(view)
 end, { desc = "Remove trailing whitespace" })
 
@@ -395,6 +403,18 @@ vim.opt.undodir = undo_dir
 local function can_persist_view(buf)
 	return vim.bo[buf].buftype == "" and vim.api.nvim_buf_get_name(buf) ~= ""
 end
+
+-- 'autoread' only reloads a buffer reactively; it needs a nudge to actually
+-- check for changes made outside Neovim (e.g. git, or the update_remote.sh workflow).
+vim.api.nvim_create_autocmd({ "FocusGained", "BufEnter", "CursorHold" }, {
+	group = augroup,
+	desc = "Check for external file changes",
+	callback = function()
+		if vim.bo.buftype == "" then
+			vim.cmd("checktime")
+		end
+	end,
+})
 
 vim.api.nvim_create_autocmd("TextYankPost", {
 	group = augroup,
@@ -516,7 +536,12 @@ end
 
 require("config.sessions").setup()
 require("config.oil").setup(plugins)
-vim.cmd.colorscheme("tokyonight-moon")
+-- Fall back to a built-in scheme if tokyonight failed to install (e.g. a
+-- first run without network) so the rest of init.lua still loads.
+if not pcall(vim.cmd.colorscheme, "tokyonight-moon") then
+	vim.notify("tokyonight-moon unavailable, falling back to habamax", vim.log.levels.WARN)
+	vim.cmd.colorscheme("habamax")
+end
 local function apply_ui_highlights()
 	vim.api.nvim_set_hl(0, "Cursor", { fg = "#1a1b26", bg = "#7dcfff" })
 	vim.api.nvim_set_hl(0, "CursorIM", { fg = "#1a1b26", bg = "#9ece6a" })
@@ -842,7 +867,7 @@ vim.keymap.set("n", "<leader>gD", function()
 end, { desc = "Diff this" })
 
 vim.keymap.set("n", "<leader>gg", function()
-	if ensure_packadd("plenary.nvim") and ensure_packadd("lazygit.nvim") then
+	if plugins.ensure("plenary.nvim") and plugins.ensure("lazygit.nvim") then
 		vim.cmd("LazyGit")
 	end
 end, { desc = "Open LazyGit" })
