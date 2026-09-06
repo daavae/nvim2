@@ -1,0 +1,12 @@
+lua/config/local.lua
+pack/byted/
+pack/local/
+.DS_Store
+nvim.log
+health
+nvim-macos-arm64/
+nvim-macos-arm64 2/
+nvim-linux-x86_64-extracted/
+.nvim-extract.*/
+.nvim-macos.*/
+*.previous/

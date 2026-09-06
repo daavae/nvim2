@@ -1,0 +1,15 @@
+#!/usr/bin/env sh
+set -eu
+
+if command -v pbcopy >/dev/null 2>&1; then
+    exec pbcopy
+elif command -v wl-copy >/dev/null 2>&1; then
+    exec wl-copy
+elif command -v xclip >/dev/null 2>&1; then
+    exec xclip -selection clipboard
+elif command -v xsel >/dev/null 2>&1; then
+    exec xsel --clipboard --input
+fi
+
+# tmux still retains the copied text in its own buffer without a system provider.
+cat >/dev/null
