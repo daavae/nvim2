@@ -89,6 +89,9 @@ function M.setup(smart_navigate)
 		group = group,
 		pattern = "term://*",
 		callback = function(args)
+			if not vim.api.nvim_buf_is_valid(args.buf) then
+				return
+			end
 			if vim.b[args.buf].floating_terminal ~= true then
 				return
 			end

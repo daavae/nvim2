@@ -334,6 +334,7 @@ end, { desc = "Navigate right" })
 
 vim.keymap.set("n", "<leader>sv", ":vsplit<CR>", { desc = "Split window vertically" })
 vim.keymap.set("n", "<leader>sh", ":split<CR>", { desc = "Split window horizontally" })
+vim.keymap.set("n", "<leader>st", "<C-w>T", { desc = "Move split into its own tab" })
 vim.keymap.set("n", "<C-S-Up>", ":resize +2<CR>", { desc = "Increase window height" })
 vim.keymap.set("n", "<C-S-Down>", ":resize -2<CR>", { desc = "Decrease window height" })
 vim.keymap.set("n", "<C-S-Left>", ":vertical resize -2<CR>", { desc = "Decrease window width" })
@@ -941,6 +942,9 @@ vim.lsp.handlers["textDocument/signatureHelp"] = function(err, result, ctx, conf
 	-- Explicitly close stale signature windows when a server reports "no
 	-- signatures"; otherwise the previous popup can remain visible.
 	local bufnr = ctx and ctx.bufnr
+	if bufnr and not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
 	if bufnr and (result == nil or result.signatures == nil or vim.tbl_isempty(result.signatures)) then
 		local winid = vim.b[bufnr].signature_help_winid
 		if winid and vim.api.nvim_win_is_valid(winid) then
