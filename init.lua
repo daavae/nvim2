@@ -95,6 +95,7 @@ vim.opt.signcolumn = "yes" -- always show a sign column
 vim.opt.colorcolumn = "100" -- show a column at 100 position chars
 vim.opt.showmatch = true -- highlights matching brackets
 vim.opt.cmdheight = 1 -- single line command line
+vim.opt.autocomplete = true -- show insert-mode completion suggestions while typing
 vim.opt.completeopt = "menuone,noinsert,noselect" -- completion options
 vim.opt.showmode = false -- do not show the mode, instead have it in statusline
 vim.opt.pumheight = 10 -- popup menu height
