@@ -485,6 +485,7 @@ vim.api.nvim_create_autocmd("BufReadPost", {
 })
 
 require("config.tasks").setup()
+require("config.todo").setup()
 
 if vim.fn.exists(":LspRestart") == 0 then
 	vim.api.nvim_create_user_command("LspRestart", function()

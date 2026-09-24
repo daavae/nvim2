@@ -79,7 +79,14 @@ end
 local markview_loaded = false
 M.get_markview = lazy("markview.nvim", function()
 	if not markview_loaded then
-		require("markview").setup({})
+		require("markview").setup({
+			markdown_inline = {
+				checkboxes = {
+					checked = { text = "☑" },
+					unchecked = { text = "☐" },
+				},
+			},
+		})
 		markview_loaded = true
 	end
 	return require("markview")
