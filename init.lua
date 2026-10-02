@@ -106,6 +106,13 @@ vim.opt.conceallevel = 0 -- do not hide markup
 vim.opt.concealcursor = "" -- do not hide cursorline in markup
 vim.opt.synmaxcol = 300 -- syntax highlighting limit
 vim.opt.fillchars = { eob = " " } -- hide "~" on empty lines
+vim.opt.list = true -- show indentation guides without exposing ordinary spaces
+vim.opt.listchars = {
+	tab = "│ ",
+	leadmultispace = "│ ",
+	extends = "…",
+	precedes = "…",
+}
 
 vim.opt.backup = false -- do not create a backup file
 vim.opt.writebackup = false -- do not write to a backup file
@@ -815,6 +822,15 @@ vim.api.nvim_create_autocmd({ "FileType", "BufWinEnter" }, {
 
 require("mini.ai").setup({})
 require("mini.comment").setup({})
+local indentscope = require("mini.indentscope")
+indentscope.setup({
+	symbol = "┃",
+	draw = {
+		delay = 0,
+		animation = indentscope.gen_animation.none(),
+	},
+	options = { try_as_border = true },
+})
 require("mini.surround").setup({
 	mappings = {
 		add = "gsa",
