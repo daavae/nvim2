@@ -173,8 +173,34 @@ function M.open_global()
 	open_todo(global_todo, "Global TODO")
 end
 
+local function toggle_with_markview(buf, row)
+	local before = vim.api.nvim_buf_get_lines(buf, row - 1, row, false)[1]
+	local ok, plugins = pcall(require, "config.plugins")
+	if not ok or not plugins.get_markview or not plugins.get_markview() then
+		return false
+	end
+
+	local extras_ok, checkboxes = pcall(require, "markview.extras.checkboxes")
+	if not extras_ok or not checkboxes.toggler or not checkboxes.toggler.init then
+		return false
+	end
+
+	local toggled = pcall(checkboxes.toggler.init, buf, row - 1, row)
+	if not toggled then
+		return false
+	end
+
+	local after = vim.api.nvim_buf_get_lines(buf, row - 1, row, false)[1]
+	return after ~= before
+end
+
 function M.toggle_checkbox()
+	local buf = vim.api.nvim_get_current_buf()
 	local row = vim.api.nvim_win_get_cursor(0)[1]
+	if toggle_with_markview(buf, row) then
+		return
+	end
+
 	local line = vim.api.nvim_get_current_line()
 	local replacement, count
 
@@ -193,7 +219,7 @@ function M.toggle_checkbox()
 		end
 	end
 
-	vim.api.nvim_buf_set_lines(0, row - 1, row, false, { replacement })
+	vim.api.nvim_buf_set_lines(buf, row - 1, row, false, { replacement })
 end
 
 function M.setup()

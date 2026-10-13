@@ -831,6 +831,37 @@ indentscope.setup({
 	},
 	options = { try_as_border = true },
 })
+
+local indent_guides_enabled = true
+local function set_indent_guides(enabled)
+	indent_guides_enabled = enabled
+	vim.g.miniindentscope_disable = not enabled
+	if not enabled then
+		indentscope.undraw()
+	end
+	for _, win in ipairs(vim.api.nvim_list_wins()) do
+		if vim.api.nvim_win_is_valid(win) then
+			vim.wo[win].list = enabled
+		end
+	end
+end
+
+local function toggle_indent_guides()
+	set_indent_guides(not indent_guides_enabled)
+	vim.notify("Indent guides " .. (indent_guides_enabled and "enabled" or "disabled"))
+end
+
+vim.api.nvim_create_autocmd("WinNew", {
+	group = augroup,
+	callback = function()
+		vim.wo.list = indent_guides_enabled
+	end,
+})
+vim.api.nvim_create_user_command("IndentGuidesToggle", toggle_indent_guides, {
+	force = true,
+	desc = "Toggle indent guides",
+})
+vim.keymap.set("n", "<leader>ig", toggle_indent_guides, { desc = "Toggle indent guides" })
 require("mini.surround").setup({
 	mappings = {
 		add = "gsa",
