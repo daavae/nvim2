@@ -63,8 +63,7 @@ local function exclude_project_todo(root)
 end
 
 local function attach_markview(buf)
-	local ok, plugins = pcall(require, "config.plugins")
-	if not ok or not plugins.get_markview or not plugins.get_markview() then
+	if not require("config.plugins").get_markview() then
 		return
 	end
 
@@ -173,56 +172,33 @@ function M.open_global()
 	open_todo(global_todo, "Global TODO")
 end
 
-local function toggle_with_markview(buf, row)
-	local before = vim.api.nvim_buf_get_lines(buf, row - 1, row, false)[1]
-	local ok, plugins = pcall(require, "config.plugins")
-	if not ok or not plugins.get_markview or not plugins.get_markview() then
-		return false
-	end
-
-	local extras_ok, checkboxes = pcall(require, "markview.extras.checkboxes")
-	if not extras_ok or not checkboxes.toggler or not checkboxes.toggler.init then
-		return false
-	end
-
-	local toggled = pcall(checkboxes.toggler.init, buf, row - 1, row)
-	if not toggled then
-		return false
-	end
-
-	local after = vim.api.nvim_buf_get_lines(buf, row - 1, row, false)[1]
-	return after ~= before
-end
-
 function M.toggle_checkbox()
-	local buf = vim.api.nvim_get_current_buf()
-	local row = vim.api.nvim_win_get_cursor(0)[1]
-	if toggle_with_markview(buf, row) then
+	if not require("config.plugins").get_markview() then
 		return
 	end
+	local buf = vim.api.nvim_get_current_buf()
+	local row = vim.api.nvim_win_get_cursor(0)[1]
+	require("markview.extras.checkboxes").toggler.init(buf, row - 1, row)
+end
 
-	local line = vim.api.nvim_get_current_line()
-	local replacement, count
-
-	replacement, count = line:gsub("^(%s*[-*+]%s+)%[[ xX]%]", function(prefix)
-		local checked = line:match("^%s*[-*+]%s+%[([xX])%]") ~= nil
-		return prefix .. (checked and "[ ]" or "[x]")
-	end, 1)
-
-	if count == 0 then
-		local indent, text = line:match("^(%s*)[-*+]%s+(.*)$")
-		if indent then
-			replacement = indent .. "- [ ] " .. text
-		else
-			indent, text = line:match("^(%s*)(.*)$")
-			replacement = indent .. "- [ ] " .. text
-		end
-	end
-
-	vim.api.nvim_buf_set_lines(buf, row - 1, row, false, { replacement })
+local function highlight()
+	vim.api.nvim_set_hl(0, "Todo", { fg = "#1a1b26", bg = "#e0af68", bold = true })
 end
 
 function M.setup()
+	local group = vim.api.nvim_create_augroup("UserConfigTodo", { clear = true })
+	highlight()
+	vim.api.nvim_create_autocmd("ColorScheme", { group = group, callback = highlight })
+	vim.api.nvim_create_autocmd({ "VimEnter", "WinEnter", "BufWinEnter" }, {
+		group = group,
+		callback = function(args)
+			if vim.bo[args.buf].buftype ~= "" or vim.w.__todo_match_id ~= nil then
+				return
+			end
+			vim.w.__todo_match_id =
+				vim.fn.matchadd("Todo", [[\v<(TODO|FIXME|HACK|NOTE|BUG|XXX|OPTIMIZE|PERF)>\s*:?]], 100)
+		end,
+	})
 	vim.api.nvim_create_user_command("TodoProject", M.open_project, {
 		force = true,
 		desc = "Open this Git project's private todo list",

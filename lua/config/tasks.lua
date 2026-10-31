@@ -1,16 +1,7 @@
-local util = require("config.util")
-
 local M = {}
 local tasks = rawget(_G, "__config_project_tasks") or {}
 _G.__config_project_tasks = tasks
 M.tasks = tasks
-
-local function capture_output(buf)
-	if not buf or not vim.api.nvim_buf_is_valid(buf) then
-		return {}
-	end
-	return util.tail(vim.api.nvim_buf_get_lines(buf, 0, -1, false), 200)
-end
 
 local function set_title(state, status)
 	if state.win and vim.api.nvim_win_is_valid(state.win) then
@@ -19,18 +10,14 @@ local function set_title(state, status)
 	end
 end
 
-local function finish(state, generation, buf, code)
+local function finish(state, generation, code)
 	if state.generation ~= generation then
 		return
 	end
 	state.job = nil
 	state.last_exit = code
 	state.duration_ms = math.floor((vim.uv.hrtime() - state.started_at) / 1e6)
-	state.last_output = capture_output(buf)
 	set_title(state, code == 0 and "done" or ("failed:%d"):format(code))
-	if vim.g.task_sound_enabled == true then
-		util.play_completion_sound(code == 0)
-	end
 	vim.notify(
 		("Task %s (code %d, %dms)"):format(code == 0 and "finished" or "failed", code, state.duration_ms),
 		code == 0 and vim.log.levels.INFO or vim.log.levels.ERROR,
@@ -70,7 +57,6 @@ local function start(state, args)
 	state.started_at = vim.uv.hrtime()
 	state.last_exit = nil
 	state.duration_ms = nil
-	state.last_output = {}
 	set_title(state, "running")
 
 	local jobid = vim.fn.jobstart(command, {
@@ -78,7 +64,7 @@ local function start(state, args)
 		cwd = state.root,
 		on_exit = function(_, code)
 			vim.schedule(function()
-				finish(state, generation, buf, code)
+				finish(state, generation, code)
 			end)
 		end,
 	})
@@ -184,35 +170,6 @@ function M.setup()
 		state.job = nil
 		set_title(state, "stopped")
 	end, { force = true, desc = "Stop the current project task" })
-	vim.api.nvim_create_user_command("RunStatus", function()
-		local state = current_task()
-		if not state then
-			vim.notify("No task has run for this project", vim.log.levels.INFO)
-			return
-		end
-		local status = state.job and "running" or (state.last_exit == nil and "idle" or "exit " .. state.last_exit)
-		local lines = {
-			"Project task",
-			"============",
-			"",
-			"Root:   " .. state.root,
-			"Script: " .. state.script,
-			"Status: " .. status,
-		}
-		if state.duration_ms then
-			lines[#lines + 1] = "Duration: " .. state.duration_ms .. "ms"
-		end
-		if #state.last_output > 0 then
-			lines[#lines + 1] = ""
-			lines[#lines + 1] = "Last output:"
-			vim.list_extend(lines, util.tail(state.last_output, 50))
-		end
-		util.open_scratch("task://status", lines, "text")
-	end, { force = true, desc = "Show the current project's last task result" })
-	vim.api.nvim_create_user_command("TaskSoundToggle", function()
-		vim.g.task_sound_enabled = not (vim.g.task_sound_enabled == true)
-		vim.notify("Task sounds " .. (vim.g.task_sound_enabled and "enabled" or "disabled"))
-	end, { force = true, desc = "Toggle sound when :Run finishes" })
 end
 
 return M

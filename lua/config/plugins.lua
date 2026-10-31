@@ -1,4 +1,4 @@
-local M = {}
+local M = type(package.loaded["config.plugins"]) == "table" and package.loaded["config.plugins"] or {}
 
 local eager = {
 	"https://www.github.com/lewis6991/gitsigns.nvim",
@@ -16,10 +16,7 @@ local optional = {
 	"https://github.com/stevearc/oil.nvim",
 	"https://github.com/nvim-tree/nvim-web-devicons",
 	"https://github.com/OXY2DEV/markview.nvim",
-	"https://github.com/phelipetls/jsonpath.nvim",
 	"https://github.com/mason-org/mason.nvim",
-	"https://www.github.com/nvim-lua/plenary.nvim",
-	"https://github.com/kdheepak/lazygit.nvim",
 }
 
 local function declared_plugin_names(extra_optional)
@@ -76,9 +73,8 @@ local function lazy(name, loader)
 	end
 end
 
-local markview_loaded = false
 M.get_markview = lazy("markview.nvim", function()
-	if not markview_loaded then
+	if not M.markview_loaded then
 		require("markview").setup({
 			markdown_inline = {
 				checkboxes = {
@@ -87,22 +83,17 @@ M.get_markview = lazy("markview.nvim", function()
 				},
 			},
 		})
-		markview_loaded = true
+		M.markview_loaded = true
 	end
 	return require("markview")
 end)
 
-M.get_jsonpath = lazy("jsonpath.nvim", function()
-	return require("jsonpath")
-end)
-
-local fzf_loaded = false
 M.get_fzf = lazy("fzf-lua", function()
 	M.ensure("nvim-web-devicons")
 	local fzf = require("fzf-lua")
-	if not fzf_loaded then
+	if not M.fzf_loaded then
 		fzf.setup({})
-		fzf_loaded = true
+		M.fzf_loaded = true
 	end
 	return fzf
 end)
@@ -112,7 +103,7 @@ function M.get_fzf_actions()
 end
 
 function M.setup(extra_optional)
-	-- Remove stale committed entries before vim.pack synchronizes the lockfile.
+	-- Remove stale entries before vim.pack synchronizes the lockfile.
 	clean_lockfile(extra_optional)
 	vim.pack.add(eager)
 	vim.pack.add(optional, { load = function() end })
