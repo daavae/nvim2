@@ -1,0 +1,11 @@
+# Shared Ghostty settings for every machine.
+# Each machine's ~/.config/ghostty/config.ghostty loads this file, then
+# linux.ghostty or macos.ghostty. scripts/setup-ghostty writes that file.
+
+theme = Moonfly
+background = #000000
+font-family = Hack
+
+# Let these reach Neovim to switch terminal panels instead of Ghostty tabs
+keybind = ctrl+page_up=unbind
+keybind = ctrl+page_down=unbind

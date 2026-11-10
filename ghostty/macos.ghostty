@@ -1,0 +1,15 @@
+# macOS-only Ghostty settings, loaded after config.ghostty.
+# Cmd+C / Cmd+V already copy and paste on macOS, so no keybinds are needed.
+
+font-size = 13
+
+# Open every window in one tmux session. A login shell picks up Homebrew's
+# PATH, which apps started from the Dock don't get.
+command = /bin/zsh -lc "exec tmux new-session -A -s main"
+
+# More screen space
+macos-titlebar-style = hidden
+
+# Left Option acts as Alt so tmux and Neovim Alt bindings work (Alt+arrows to
+# resize panes, <M-v> to paste). Right Option still types special characters.
+macos-option-as-alt = left

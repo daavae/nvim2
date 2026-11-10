@@ -64,4 +64,7 @@ else
     echo "Note: Alias already exists in $CONF_FILE"
 fi
 
+# 5. Use the shared Ghostty config from this repo
+"$REPO_DIR/scripts/setup-ghostty" linux
+
 echo "Please run: source $CONF_FILE"
