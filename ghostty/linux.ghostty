@@ -1,0 +1,15 @@
+# Linux-only Ghostty settings, loaded after config.ghostty.
+
+font-size = 10
+
+# Open every window in one tmux session
+command = tmux new-session -A -s main
+
+# More screen space
+window-decoration = false
+
+# macOS-style copy and paste: Alt sits where Cmd does on this keyboard.
+# keyd turns Alt+C/V into Ctrl+C/V in other apps; ~/.config/keyd/app.conf
+# exempts Ghostty so these bindings receive them.
+keybind = alt+c=copy_to_clipboard:mixed
+keybind = alt+v=paste_from_clipboard

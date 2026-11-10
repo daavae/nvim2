@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Point this machine's Ghostty config at the shared files in this repo.
+# Usage: scripts/setup-ghostty linux|macos
+set -euo pipefail
+
+OS=${1:?usage: setup-ghostty linux|macos}
+case "$OS" in
+    linux|macos) ;;
+    *) echo "Unsupported OS: $OS (expected linux or macos)" >&2; exit 2 ;;
+esac
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+GHOSTTY_DIR="$HOME/.config/ghostty"
+GHOSTTY_CONF="$GHOSTTY_DIR/config.ghostty"
+STUB="# Written by $REPO_DIR/scripts/setup-ghostty. Edit the files below instead.
+config-file = $REPO_DIR/ghostty/config.ghostty
+config-file = $REPO_DIR/ghostty/$OS.ghostty"
+
+mkdir -p "$GHOSTTY_DIR"
+if [ -f "$GHOSTTY_CONF" ] && [ "$(cat "$GHOSTTY_CONF")" != "$STUB" ]; then
+    BACKUP="$GHOSTTY_CONF.bak.$(date +%Y%m%d%H%M%S)"
+    mv "$GHOSTTY_CONF" "$BACKUP"
+    echo "Backed up existing Ghostty config to $BACKUP"
+fi
+printf '%s\n' "$STUB" > "$GHOSTTY_CONF"
+echo "Ghostty config now loads $REPO_DIR/ghostty/{config,$OS}.ghostty"
+
+# Ghostty also reads these, after the file above, so their settings would win.
+for other in "$GHOSTTY_DIR/config" \
+    "$HOME/Library/Application Support/com.mitchellh.ghostty/config" \
+    "$HOME/Library/Application Support/com.mitchellh.ghostty/config.ghostty"; do
+    if [ -s "$other" ]; then
+        echo "Warning: $other also exists and may override these settings" >&2
+    fi
+done
