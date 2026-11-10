@@ -107,6 +107,19 @@ local function setup_efm()
 			"svelte",
 		},
 		init_options = { documentFormatting = true },
+		handlers = {
+			-- A project whose ESLint config has no parser for the file (e.g. TS without
+			-- @typescript-eslint/parser) gets a bogus "Parsing error" on valid code. Real syntax
+			-- errors already come from the language server, so drop these.
+			["textDocument/publishDiagnostics"] = function(err, result, ctx)
+				if result and result.diagnostics then
+					result.diagnostics = vim.tbl_filter(function(d)
+						return not d.message:find("Parsing error", 1, true)
+					end, result.diagnostics)
+				end
+				return vim.lsp.diagnostic.on_publish_diagnostics(err, result, ctx)
+			end,
+		},
 		settings = {
 			languages = {
 				c = { clangfmt, cpplint },

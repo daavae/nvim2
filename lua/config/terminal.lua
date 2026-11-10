@@ -4,6 +4,7 @@ local state = M.state
 state.items = state.items or {}
 state.panels = state.panels or {}
 state.next_id = state.next_id or 0
+state.position = state.position or "bottom"
 
 local function find(id)
 	for index, item in ipairs(state.items) do
@@ -20,7 +21,11 @@ local function panel()
 end
 
 local function resize(win)
-	vim.api.nvim_win_set_height(win, math.max(1, math.min(12, math.floor((vim.o.lines - vim.o.cmdheight - 2) / 4))))
+	if state.position == "right" then
+		vim.api.nvim_win_set_width(win, math.max(20, math.floor(vim.o.columns * 0.4)))
+	else
+		vim.api.nvim_win_set_height(win, math.max(1, math.min(12, math.floor((vim.o.lines - vim.o.cmdheight - 2) / 4))))
+	end
 end
 
 local function refresh()
@@ -48,15 +53,25 @@ local function refresh()
 	end
 end
 
+-- Remember where a terminal was scrolled to, unless it was at the bottom following output.
+local function remember(win)
+	local item = find(vim.b[vim.api.nvim_win_get_buf(win)].panel_terminal_id)
+	if item then
+		local following = vim.fn.line("w$", win) >= vim.fn.line("$", win)
+		item.view = not following and vim.api.nvim_win_call(win, vim.fn.winsaveview) or nil
+	end
+end
+
 local function hide(view)
 	view = view or panel()
 	vim.cmd("stopinsert")
 	local focused = view.win and vim.api.nvim_get_current_win() == view.win
 	if view.win and vim.api.nvim_win_is_valid(view.win) then
+		remember(view.win)
 		if #vim.api.nvim_tabpage_list_wins(vim.api.nvim_win_get_tabpage(view.win)) == 1 then
 			vim.api.nvim_win_set_buf(view.win, vim.api.nvim_create_buf(true, false))
 			vim.wo[view.win].winbar = ""
-			vim.wo[view.win].winfixheight = false
+			vim.wo[view.win].winfixheight, vim.wo[view.win].winfixwidth = false, false
 		else
 			vim.api.nvim_win_close(view.win, true)
 		end
@@ -67,7 +82,7 @@ local function hide(view)
 	end
 end
 
-local function show(item)
+local function show(item, insert)
 	local view = panel()
 	local current = vim.api.nvim_get_current_win()
 	if current ~= view.win and vim.api.nvim_win_get_config(current).relative == "" then
@@ -80,18 +95,27 @@ local function show(item)
 				break
 			end
 		end
-		vim.cmd("botright split")
+		local right = state.position == "right"
+		vim.cmd(right and "botright vsplit" or "botright split")
 		view.win = vim.api.nvim_get_current_win()
-		vim.wo[view.win].winfixheight = true
+		vim.wo[view.win].winfixheight, vim.wo[view.win].winfixwidth = not right, right
 		resize(view.win)
 	else
 		vim.api.nvim_set_current_win(view.win)
+		if vim.api.nvim_win_get_buf(view.win) ~= item.buf then
+			remember(view.win)
+		end
 	end
 	state.active, view.active = item.id, item.id
 	vim.api.nvim_win_set_buf(view.win, item.buf)
 	vim.wo[view.win].number, vim.wo[view.win].relativenumber, vim.wo[view.win].signcolumn = false, false, "no"
 	refresh()
-	vim.cmd("startinsert")
+	if item.view then
+		-- Reopen at the saved scroll position in normal mode; insert mode would jump to the bottom.
+		vim.fn.winrestview(item.view)
+	elseif insert ~= false then
+		vim.cmd("startinsert")
+	end
 end
 
 function M.new()
@@ -122,6 +146,41 @@ function M.toggle()
 		else
 			M.new()
 		end
+	end
+end
+
+function M.move(position)
+	state.position = position or (state.position == "right" and "bottom" or "right")
+	local view = panel()
+	local item = find(view.active or state.active)
+	if not (item and view.win and vim.api.nvim_win_is_valid(view.win)) then
+		return
+	end
+	-- Reopening the panel would jump the terminal to its bottom and reflow the other
+	-- windows, so save every view (and the focused window) and put them back afterwards.
+	local current = vim.api.nvim_get_current_win()
+	local term_view = vim.api.nvim_win_call(view.win, vim.fn.winsaveview)
+	local views = {}
+	for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+		if win ~= view.win and vim.api.nvim_win_get_config(win).relative == "" then
+			views[win] = vim.api.nvim_win_call(win, vim.fn.winsaveview)
+		end
+	end
+	local term_focused = current == view.win
+	hide(view)
+	show(item, false)
+	vim.api.nvim_win_call(view.win, function()
+		vim.fn.winrestview(term_view)
+	end)
+	for win, saved in pairs(views) do
+		if vim.api.nvim_win_is_valid(win) then
+			vim.api.nvim_win_call(win, function()
+				vim.fn.winrestview(saved)
+			end)
+		end
+	end
+	if not term_focused and vim.api.nvim_win_is_valid(current) then
+		vim.api.nvim_set_current_win(current)
 	end
 end
 
@@ -301,6 +360,19 @@ function M.setup(smart_navigate)
 	vim.keymap.set({ "n", "i", "t" }, "<C-`>", M.toggle, { desc = "Toggle terminal panel" })
 	vim.keymap.set({ "n", "i", "t" }, "<C-S-`>", M.new, { desc = "New panel terminal" })
 	vim.keymap.set("n", "<leader>tt", M.toggle, { desc = "Toggle terminal panel" })
+	vim.keymap.set("n", "<leader>tm", function()
+		M.move()
+	end, { desc = "Move terminal panel (bottom/right)" })
+	vim.api.nvim_create_user_command("TerminalMove", function(args)
+		M.move(args.args ~= "" and args.args or nil)
+	end, {
+		force = true,
+		nargs = "?",
+		complete = function()
+			return { "bottom", "right" }
+		end,
+		desc = "Move the terminal panel to the bottom or right",
+	})
 	vim.api.nvim_create_user_command(
 		"TerminalNew",
 		M.new,

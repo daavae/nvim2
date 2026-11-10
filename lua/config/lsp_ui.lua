@@ -18,7 +18,7 @@ local function toggle_feature(label, feature)
 end
 
 local function highlights()
-	local yellow = "#e0af68"
+	local yellow = "#e3c78a"
 	vim.api.nvim_set_hl(0, "DiagnosticWarn", { fg = yellow })
 	vim.api.nvim_set_hl(0, "DiagnosticVirtualTextWarn", { fg = yellow, bg = "NONE" })
 	vim.api.nvim_set_hl(0, "DiagnosticSignWarn", { fg = yellow })
