@@ -182,7 +182,7 @@ function M.toggle_checkbox()
 end
 
 local function highlight()
-	vim.api.nvim_set_hl(0, "Todo", { fg = "#1a1b26", bg = "#e0af68", bold = true })
+	vim.api.nvim_set_hl(0, "Todo", { fg = "#080808", bg = "#e3c78a", bold = true })
 end
 
 function M.setup()

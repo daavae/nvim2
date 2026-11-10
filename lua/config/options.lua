@@ -56,6 +56,33 @@ function M.setup()
 	opt.path:append("**")
 	opt.mouse = "a"
 	opt.clipboard:append("unnamedplus")
+	-- KWin only offers ext-data-control, which wl-clipboard 2.2 lacks; wl-copy then
+	-- grabs focus with a popup surface and KDE hands focus to another window (Chrome).
+	-- xclip is no better: KWin only syncs with XWayland while an X11 window has focus, so
+	-- from a Wayland terminal it sees a separate clipboard. Klipper uses the real one.
+	if vim.env.WAYLAND_DISPLAY and vim.env.XDG_CURRENT_DESKTOP == "KDE" and vim.fn.executable("qdbus6") == 1 then
+		local function klipper(method, ...)
+			local cmd = { "qdbus6", "org.kde.klipper", "/klipper", "org.kde.klipper.klipper." .. method, ... }
+			return vim.system(cmd):wait(2000)
+		end
+		local function copy(lines, regtype)
+			klipper("setClipboardContents", table.concat(lines, "\n") .. (regtype == "V" and "\n" or ""))
+		end
+		local function paste()
+			local result = klipper("getClipboardContents")
+			if result.code ~= 0 then
+				return {}
+			end
+			-- qdbus6 adds one trailing newline to its output.
+			return vim.split((result.stdout:gsub("\n$", "")), "\n")
+		end
+		vim.g.clipboard = {
+			name = "klipper",
+			copy = { ["+"] = copy, ["*"] = copy },
+			paste = { ["+"] = paste, ["*"] = paste },
+			cache_enabled = 0,
+		}
+	end
 	opt.guicursor =
 		"n-v-c:block-Cursor/lCursor,i-ci-ve:ver25-CursorIM/lCursor,r-cr:hor20-Cursor/lCursor,o:hor50-Cursor/lCursor,a:blinkwait700-blinkoff400-blinkon250,sm:block-blinkwait175-blinkoff150-blinkon175"
 

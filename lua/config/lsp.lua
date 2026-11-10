@@ -12,6 +12,13 @@ function M.setup()
 		end, { nargs = 0 })
 	end
 
+	-- Nvim doesn't report on-disk file changes to servers on Linux by default, so files changed
+	-- outside the editor (git, npm, new files) leave stale diagnostics. Opt in when inotify is available.
+	if vim.fn.executable("inotifywait") == 1 then
+		vim.lsp.config("*", {
+			capabilities = { workspace = { didChangeWatchedFiles = { dynamicRegistration = true } } },
+		})
+	end
 	vim.lsp.config("lua_ls", {
 		settings = {
 			Lua = {

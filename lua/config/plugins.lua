@@ -7,7 +7,7 @@ local eager = {
 	{ src = "https://github.com/nvim-treesitter/nvim-treesitter", branch = "main", build = ":TSUpdate" },
 	"https://www.github.com/neovim/nvim-lspconfig",
 	"https://github.com/creativenull/efmls-configs-nvim",
-	"https://github.com/folke/tokyonight.nvim",
+	"https://github.com/bluz71/vim-moonfly-colors",
 	"https://github.com/tpope/vim-obsession",
 }
 
@@ -92,7 +92,19 @@ M.get_fzf = lazy("fzf-lua", function()
 	M.ensure("nvim-web-devicons")
 	local fzf = require("fzf-lua")
 	if not M.fzf_loaded then
-		fzf.setup({})
+		-- fd/rg already respect .gitignore; these only matter for the find/grep fallback.
+		local skip = { ".git", "node_modules", ".venv" }
+		local grep_defaults = require("fzf-lua.defaults").defaults.grep.grep_opts
+		fzf.setup({
+			files = {
+				find_opts = [[-type d \( -name ]]
+					.. table.concat(skip, [[ -o -name ]])
+					.. [[ \) -prune -o -type f -print]],
+			},
+			grep = {
+				grep_opts = "--exclude-dir=" .. table.concat(skip, " --exclude-dir=") .. " " .. grep_defaults,
+			},
+		})
 		M.fzf_loaded = true
 	end
 	return fzf

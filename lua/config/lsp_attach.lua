@@ -79,6 +79,19 @@ local function on_attach(ev)
 end
 
 function M.setup()
+	-- Nvim's completion re-enables the first client on buffer reload (:checktime) using its
+	-- saved ID; if that client was stopped (e.g. :LspRestart) the assert errors. Skip dead IDs.
+	local completion = vim.lsp.completion
+	if not completion._dead_client_guard then
+		completion._dead_client_guard = true
+		local enable = completion.enable
+		completion.enable = function(on, client_id, ...)
+			if on and not vim.lsp.get_client_by_id(client_id) then
+				return
+			end
+			return enable(on, client_id, ...)
+		end
+	end
 	vim.keymap.set("i", "<C-Space>", function()
 		vim.lsp.completion.get()
 	end, { desc = "Trigger completion" })
@@ -88,9 +101,42 @@ function M.setup()
 		end
 		return vim.fn.complete_info({ "selected" }).selected == -1 and "<C-e><CR>" or "<C-y>"
 	end, { expr = true, desc = "Accept completion or insert newline" })
-	vim.api.nvim_create_autocmd("LspAttach", {
-		group = vim.api.nvim_create_augroup("UserConfigLspAttach", { clear = true }),
-		callback = on_attach,
+	local group = vim.api.nvim_create_augroup("UserConfigLspAttach", { clear = true })
+	vim.api.nvim_create_autocmd("LspAttach", { group = group, callback = on_attach })
+	-- Nvim only re-pulls a buffer's diagnostics when that buffer changes. Servers like tsgo
+	-- report interFileDependencies but never send workspace/diagnostic/refresh, so fixing an
+	-- error in one file left stale errors in the others until :LspRestart. Re-pull them all
+	-- shortly after any edit.
+	M.refresh_timers = M.refresh_timers or {}
+	vim.api.nvim_create_autocmd("LspNotify", {
+		group = group,
+		callback = function(args)
+			if args.data.method ~= "textDocument/didChange" then
+				return
+			end
+			local client = vim.lsp.get_client_by_id(args.data.client_id)
+			if
+				not (client and vim.tbl_get(client.server_capabilities, "diagnosticProvider", "interFileDependencies"))
+			then
+				return
+			end
+			local timer = M.refresh_timers[client.id] or vim.uv.new_timer()
+			M.refresh_timers[client.id] = timer
+			timer:stop()
+			timer:start(
+				500,
+				0,
+				vim.schedule_wrap(function()
+					if vim.lsp.get_client_by_id(client.id) then
+						vim.lsp.diagnostic.on_refresh(
+							nil,
+							nil,
+							{ client_id = client.id, method = "workspace/diagnostic/refresh" }
+						)
+					end
+				end)
+			)
+		end,
 	})
 	for _, buf in ipairs(vim.api.nvim_list_bufs()) do
 		vim.b[buf].lsp_buffer_setup_done = nil
