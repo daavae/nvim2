@@ -44,14 +44,6 @@
       "rev": "b73018b75affd13fa38e2fc94ef753b465f770d7",
       "src": "https://github.com/stevearc/oil.nvim"
     },
-    "supermaven-nvim": {
-      "rev": "07d20fce48a5629686aefb0a7cd4b25e33947d50",
-      "src": "https://github.com/supermaven-inc/supermaven-nvim"
-    },
-    "vim-moonfly-colors": {
-      "rev": "2c883835f5b7b380a0a9e80695c420f7efebdfe4",
-      "src": "https://github.com/bluz71/vim-moonfly-colors"
-    },
     "vim-obsession": {
       "rev": "ed9dfc7c2cc917ace8b24f4f9f80a91e05614b63",
       "src": "https://github.com/tpope/vim-obsession"

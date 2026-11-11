@@ -4,7 +4,9 @@
 
 theme = Moonfly
 background = #000000
-font-family = Hack
+
+# Use Ghostty's platform default font. Keeping this unset avoids requiring a
+# separately installed font on each machine.
 
 # Let these reach Neovim to switch terminal panels instead of Ghostty tabs
 keybind = ctrl+page_up=unbind
