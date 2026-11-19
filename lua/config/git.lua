@@ -1,8 +1,10 @@
 local M = type(package.loaded["config.git"]) == "table" and package.loaded["config.git"] or {}
 M.popup = M.popup or {}
-local popup = M.popup
+M.review_popup = M.review_popup or {}
+local git_popup = M.popup
+local review_popup = M.review_popup
 
-local function window_config()
+local function window_config(title)
 	local width = math.max(1, math.min(math.floor(vim.o.columns * 0.9), vim.o.columns - 2))
 	local height = math.max(1, math.min(math.floor(vim.o.lines * 0.9), vim.o.lines - vim.o.cmdheight - 3))
 	return {
@@ -13,12 +15,12 @@ local function window_config()
 		col = math.max(0, math.floor((vim.o.columns - width) / 2)),
 		style = "minimal",
 		border = "rounded",
-		title = " LazyGit ",
+		title = " " .. title .. " ",
 		title_pos = "center",
 	}
 end
 
-local function finish(buf, code)
+local function finish(popup, label, buf, code)
 	if popup.buf ~= buf then
 		return
 	end
@@ -35,54 +37,80 @@ local function finish(buf, code)
 	end
 	vim.cmd("checktime")
 	if code ~= 0 then
-		vim.notify("LazyGit exited with code " .. code, vim.log.levels.WARN)
+		vim.notify(label .. " exited with code " .. code, vim.log.levels.WARN)
 	end
 end
 
-local function open()
+local function repository_root()
+	local path = vim.api.nvim_buf_get_name(0)
+	local dir = path ~= "" and not path:find("://", 1, true) and vim.fs.dirname(path) or vim.fn.getcwd()
+	local result = vim.system({ "git", "-C", dir, "rev-parse", "--show-toplevel" }, { text = true }):wait()
+	return result.code == 0 and vim.trim(result.stdout) or nil
+end
+
+local function open_tui(popup, opts)
 	if popup.win and vim.api.nvim_win_is_valid(popup.win) then
 		vim.api.nvim_set_current_win(popup.win)
 		vim.cmd("startinsert")
 		return
 	end
-	if vim.fn.executable("lazygit") ~= 1 then
-		vim.notify("Install the lazygit executable to use the Git popup", vim.log.levels.ERROR)
+	if vim.fn.executable(opts.executable) ~= 1 then
+		vim.notify("Install " .. opts.executable .. " to use " .. opts.label, vim.log.levels.ERROR)
 		return
 	end
 	if not popup.buf or not vim.api.nvim_buf_is_valid(popup.buf) then
-		local path = vim.api.nvim_buf_get_name(0)
-		local dir = path ~= "" and not path:find("://", 1, true) and vim.fs.dirname(path) or vim.fn.getcwd()
-		local result = vim.system({ "git", "-C", dir, "rev-parse", "--show-toplevel" }, { text = true }):wait()
-		if result.code ~= 0 then
-			vim.notify("LazyGit requires a Git repository", vim.log.levels.WARN)
+		popup.root = repository_root()
+		if not popup.root then
+			vim.notify(opts.label .. " requires a Git repository", vim.log.levels.WARN)
 			return
 		end
-		popup.root = vim.trim(result.stdout)
 		popup.buf = vim.api.nvim_create_buf(false, true)
 		vim.bo[popup.buf].bufhidden = "hide"
 	end
 	popup.origin = vim.api.nvim_get_current_win()
-	popup.win = vim.api.nvim_open_win(popup.buf, true, window_config())
+	popup.win = vim.api.nvim_open_win(popup.buf, true, window_config(opts.label))
 	vim.wo[popup.win].winblend = 0
 	if not popup.job then
 		local buf = popup.buf
-		local job = vim.fn.jobstart({ "lazygit", "-p", popup.root }, {
+		local job = vim.fn.jobstart(opts.command(popup.root), {
 			term = true,
 			cwd = popup.root,
 			on_exit = function(_, code)
 				vim.schedule(function()
-					finish(buf, code)
+					finish(popup, opts.label, buf, code)
 				end)
 			end,
 		})
 		if job <= 0 then
-			finish(buf, job)
+			finish(popup, opts.label, buf, job)
 			return
 		end
 		popup.job = job
-		vim.bo[buf].filetype = "lazygit"
+		vim.bo[buf].filetype = opts.filetype
 	end
 	vim.cmd("startinsert")
+end
+
+local function open_lazygit()
+	open_tui(git_popup, {
+		executable = "lazygit",
+		label = "LazyGit",
+		filetype = "lazygit",
+		command = function(root)
+			return { "lazygit", "-p", root }
+		end,
+	})
+end
+
+local function open_tuicr()
+	open_tui(review_popup, {
+		executable = "tuicr",
+		label = "TuiCr",
+		filetype = "tuicr",
+		command = function()
+			return { "tuicr", "--no-update-check" }
+		end,
+	})
 end
 
 function M.setup()
@@ -127,13 +155,21 @@ function M.setup()
 	vim.api.nvim_create_autocmd("VimResized", {
 		group = group,
 		callback = function()
-			if popup.win and vim.api.nvim_win_is_valid(popup.win) then
-				vim.api.nvim_win_set_config(popup.win, window_config())
+			for _, item in ipairs({ { git_popup, "LazyGit" }, { review_popup, "TuiCr" } }) do
+				if item[1].win and vim.api.nvim_win_is_valid(item[1].win) then
+					vim.api.nvim_win_set_config(item[1].win, window_config(item[2]))
+				end
 			end
 		end,
 	})
-	vim.api.nvim_create_user_command("LazyGit", open, { force = true, desc = "Open LazyGit in a terminal popup" })
-	vim.keymap.set("n", "<leader>gg", open, { desc = "Open LazyGit" })
+	vim.api.nvim_create_user_command(
+		"LazyGit",
+		open_lazygit,
+		{ force = true, desc = "Open LazyGit in a terminal popup" }
+	)
+	vim.api.nvim_create_user_command("TuiCr", open_tuicr, { force = true, desc = "Open TuiCr in a terminal popup" })
+	vim.keymap.set("n", "<leader>gg", open_lazygit, { desc = "Open LazyGit" })
+	vim.keymap.set("n", "<leader>gc", open_tuicr, { desc = "Open TuiCr code review" })
 end
 
 return M

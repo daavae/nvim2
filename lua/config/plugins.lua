@@ -13,19 +13,21 @@ local eager = {
 
 local optional = {
 	"https://www.github.com/ibhagwan/fzf-lua",
-	"https://github.com/stevearc/oil.nvim",
+	"https://github.com/nvim-lua/plenary.nvim",
+	"https://github.com/mikavilpas/yazi.nvim",
 	"https://github.com/nvim-tree/nvim-web-devicons",
 	"https://github.com/OXY2DEV/markview.nvim",
 	"https://github.com/mason-org/mason.nvim",
 }
 
 local function declared_plugin_names(extra_optional)
-	local names = { ["oil.nvim"] = true }
+	local names = {}
 	for _, specs in ipairs({ eager, optional, extra_optional or {} }) do
 		for _, spec in ipairs(specs) do
 			local src = type(spec) == "table" and spec.src or spec
 			local name = src and src:match("/([^/]+)$")
 			if name then
+				name = name:gsub("%.git$", "")
 				names[name] = true
 			end
 		end
@@ -33,26 +35,24 @@ local function declared_plugin_names(extra_optional)
 	return names
 end
 
-local function clean_lockfile(extra_optional)
-	local path = vim.fn.stdpath("config") .. "/nvim-pack-lock.json"
-	local ok, lines = pcall(vim.fn.readfile, path)
-	if not ok or #lines == 0 then
-		return
-	end
-	local decoded_ok, lock = pcall(vim.json.decode, table.concat(lines, "\n"))
-	if not decoded_ok or type(lock.plugins) ~= "table" then
+local function remove_retired_plugins(extra_optional)
+	local ok, installed = pcall(vim.pack.get, nil, { info = false })
+	if not ok then
+		vim.notify("Failed to inspect installed plugins: " .. tostring(installed), vim.log.levels.WARN)
 		return
 	end
 	local declared = declared_plugin_names(extra_optional)
-	local changed = false
-	for name in pairs(lock.plugins) do
-		if not declared[name] then
-			lock.plugins[name] = nil
-			changed = true
+	local retired = {}
+	for _, plugin in ipairs(installed) do
+		if not declared[plugin.spec.name] then
+			retired[#retired + 1] = plugin.spec.name
 		end
 	end
-	if changed then
-		vim.fn.writefile(vim.split(vim.json.encode(lock, { indent = "  ", sort_keys = true }), "\n"), path)
+	if #retired > 0 then
+		local deleted, err = pcall(vim.pack.del, retired)
+		if not deleted then
+			vim.notify("Failed to remove retired plugins: " .. tostring(err), vim.log.levels.WARN)
+		end
 	end
 end
 
@@ -115,20 +115,17 @@ function M.get_fzf_actions()
 end
 
 function M.setup(extra_optional)
-	-- Remove stale entries before vim.pack synchronizes the lockfile.
-	clean_lockfile(extra_optional)
-	vim.pack.add(eager)
-	vim.pack.add(optional, { load = function() end })
-	if extra_optional and #extra_optional > 0 then
-		vim.pack.add(extra_optional, { load = function() end })
+	-- vim.pack caches its lock data for the lifetime of the process. Re-running
+	-- synchronization after another Neovim instance changed the lockfile can make
+	-- existing plugin directories look like failed clones, so only sync at startup.
+	if vim.v.vim_did_enter == 0 then
+		vim.pack.add(eager)
+		vim.pack.add(optional, { load = function() end })
+		if extra_optional and #extra_optional > 0 then
+			vim.pack.add(extra_optional, { load = function() end })
+		end
+		remove_retired_plugins(extra_optional)
 	end
-	clean_lockfile(extra_optional)
-	vim.api.nvim_create_autocmd("VimLeavePre", {
-		group = vim.api.nvim_create_augroup("UserConfigPluginLock", { clear = true }),
-		callback = function()
-			clean_lockfile(extra_optional)
-		end,
-	})
 
 	for _, name in ipairs({
 		"nvim-treesitter",
